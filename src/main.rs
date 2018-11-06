@@ -3,60 +3,44 @@ use std::ops::Deref;
 use std::sync::Mutex;
 
 #[derive(Debug, Copy, Clone)]
-pub struct RefId {
-    origin: Origin,
-    id: usize,
+pub enum Site {
+    SourceFile { file: &'static str, line: usize },
+    Unknown,
+    // TODO: Backtrace,
 }
 
-impl PartialEq for RefId {
-    fn eq(&self, rhs: &Self) -> bool {
-        self.id == rhs.id
-    }
+#[derive(Debug, Clone)]
+enum OriginKind {
+    Created,
+    ClonedFrom(usize, Box<Origin>),
+    // Upgraded(Box<Origin>),
+    // Downgraded(Box<Origin>),
 }
 
-impl Eq for RefId {}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Origin {
-    Source { file: &'static str, line: usize },
-    Anonymous,
-    UnknownClone,
-    // TODO: Backtrace
-}
-
-impl Origin {
-    #[inline]
-    pub fn from_source(file: &'static str, line: usize) -> Self {
-        Origin::Source { file, line }
-    }
-}
-
-impl RefId {
-    pub fn origin(&self) -> Origin {
-        self.origin
-    }
-
-    pub fn id(&self) -> usize {
-        self.id
-    }
+#[derive(Debug, Clone)]
+pub struct Origin {
+    kind: OriginKind,
+    site: Site,
 }
 
 #[derive(Debug)]
 pub struct Strong<T> {
-    id: RefId,
+    id: usize,
+    origin: Origin,
     holder: *const Holder<T>,
 }
 
 #[derive(Debug)]
 pub struct Weak<T> {
-    id: RefId,
+    id: usize,
+    origin: Origin,
     holder: *const Holder<T>,
 }
 
 #[derive(Debug)]
 struct MetaData {
-    strong_refs: Vec<RefId>,
-    weak_refs: Vec<RefId>,
+    strong_refs: Vec<usize>,
+    weak_refs: Vec<usize>,
     id_counter: usize,
 }
 
@@ -99,7 +83,7 @@ impl<T> Holder<T> {
         Box::into_raw(boxed) as *const Holder<T>
     }
 
-    fn create_strong_ref(&self, origin: Origin) -> Strong<T> {
+    fn create_strong_ref(&self) -> usize {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
@@ -111,32 +95,23 @@ impl<T> Holder<T> {
 
         // Get the next available ID and increment ID counter, to create the new reference id.
         let id = meta.id_counter;
-        meta.id_counter += 1;
-        let rid = RefId { origin, id };
 
         // We can now store this ID and return the reference.
-        meta.strong_refs.push(rid);
-        Strong {
-            id: rid,
-            holder: self as *const Holder<T>,
-        }
+        meta.strong_refs.push(id);
+        id
     }
 
-    fn create_weak_ref(&self, origin: Origin) -> Weak<T> {
+    fn create_weak_ref(&self) -> usize {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         let id = meta.id_counter;
         meta.id_counter += 1;
-        let rid = RefId { origin, id };
 
-        meta.weak_refs.push(rid);
-        Weak {
-            id: rid,
-            holder: self as *const Holder<T>,
-        }
+        meta.weak_refs.push(id);
+        id
     }
 
-    fn drop_strong_ref(&self, id: &RefId) {
+    fn drop_strong_ref(&self, id: usize) {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
         assert!(
             self.data.is_some(),
@@ -144,7 +119,7 @@ impl<T> Holder<T> {
         );
 
         // Remove from list of strong_refs.
-        delete_from_vec(&mut meta.strong_refs, id);
+        delete_from_vec(&mut meta.strong_refs, &id);
 
         if meta.strong_refs.is_empty() {
             // Here, we have to cheat the borrow checker: We know there are no strong references to
@@ -171,38 +146,64 @@ impl<T> Holder<T> {
         // FIXME: Clean up remaining memory (free holder).
     }
 
-    fn drop_weak_ref(&self, id: &RefId) {
+    fn drop_weak_ref(&self, id: usize) {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
-        delete_from_vec(&mut meta.weak_refs, id);
+        delete_from_vec(&mut meta.weak_refs, &id);
 
         // FIXME: Clean up remaining memory (free holder).
     }
 }
 
 impl<T> Strong<T> {
+    fn new_with_site(data: T, site: Site) -> Strong<T> {
+        let holder = Box::leak(Box::new(Holder::new(data)));
+        let id = holder.create_strong_ref();
+        Strong {
+            id,
+            origin: Origin {
+                site,
+                kind: OriginKind::Created,
+            },
+            holder,
+        }
+    }
+
+    #[inline]
+    fn clone_with_site(&self, site: Site) -> Strong<T> {
+        let holder = unsafe { &*self.holder };
+
+        let new_id = holder.create_strong_ref();
+
+        Strong {
+            id: new_id,
+            holder,
+            origin: Origin {
+                kind: OriginKind::ClonedFrom(self.id, Box::new(self.origin.clone())),
+                site: site,
+            },
+        }
+    }
+
     #[inline]
     pub fn new(data: T) -> Strong<T> {
-        Self::new_with_origin(data, Origin::Anonymous)
+        Self::new_with_site(data, Site::Unknown)
     }
 
     #[inline]
-    pub fn new_with_origin(data: T, origin: Origin) -> Strong<T> {
-        let holder = Box::leak(Box::new(Holder::new(data)));
-        holder.create_strong_ref(origin)
+    pub fn new_from(data: T, file: &'static str, line: usize) -> Strong<T> {
+        Self::new_with_site(data, Site::SourceFile { file, line })
     }
 
     #[inline]
-    pub fn clone_with_origin(&self, origin: Origin) -> Strong<T> {
-        let holder = unsafe { &*self.holder };
-        holder.create_strong_ref(origin)
+    fn clone_from(&self, file: &'static str, line: usize) -> Strong<T> {
+        self.clone_with_site(Site::SourceFile { file, line })
     }
 }
 
 impl<T> Clone for Strong<T> {
     fn clone(&self) -> Self {
-        let holder = unsafe { &*self.holder };
-        holder.create_strong_ref(Origin::UnknownClone)
+        self.clone_with_site(Site::Unknown)
     }
 }
 
@@ -220,15 +221,15 @@ impl<T> Deref for Strong<T> {
 
 impl<T> Drop for Strong<T> {
     fn drop(&mut self) {
-        unsafe { &*self.holder }.drop_strong_ref(&self.id);
+        unsafe { &*self.holder }.drop_strong_ref(self.id);
     }
 }
 
-impl<T> Drop for Weak<T> {
-    fn drop(&mut self) {
-        unsafe { &*self.holder }.drop_weak_ref(&self.id);
-    }
-}
+// impl<T> Drop for Weak<T> {
+//     fn drop(&mut self) {
+//         unsafe { &*self.holder }.drop_weak_ref(&self.id);
+//     }
+// }
 
 fn main() {
     println!("Hello, world!");
