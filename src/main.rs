@@ -3,34 +3,34 @@ use std::ops::Deref;
 use std::sync::Mutex;
 
 #[derive(Debug, Eq, PartialEq, Hash, Copy, Clone)]
-struct RefId {
+pub struct RefId {
     file: &'static str,
     line: usize,
     id: usize,
 }
 
 impl RefId {
-    fn file(&self) -> &'static str {
+    pub fn file(&self) -> &'static str {
         self.file
     }
 
-    fn line(&self) -> usize {
+    pub fn line(&self) -> usize {
         self.line
     }
 
-    fn id(&self) -> usize {
+    pub fn id(&self) -> usize {
         self.id
     }
 }
 
 #[derive(Debug)]
-struct Strong<T> {
+pub struct Strong<T> {
     id: RefId,
     holder: *const Holder<T>,
 }
 
 #[derive(Debug)]
-struct Weak<T> {
+pub struct Weak<T> {
     id: RefId,
     holder: *const Holder<T>,
 }
@@ -65,7 +65,6 @@ where
 }
 
 impl<T> Holder<T> {
-    #[inline]
     fn new(data: T) -> Holder<T> {
         Holder {
             data: Some(Box::new(data)),
@@ -77,36 +76,47 @@ impl<T> Holder<T> {
         }
     }
 
-    #[inline]
     fn new_floating(data: T) -> *const Holder<T> {
         let boxed = Box::new(Self::new(data));
         Box::into_raw(boxed) as *const Holder<T>
     }
 
-    #[inline]
     fn create_strong_ref(&self, file: &'static str, line: usize) -> Strong<T> {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
+        // If we ever run into this assert, some invariant we assumed did not hold.
         assert!(
             self.data.is_some(),
-            "Cannot create strong reference, data has already been dropped.",
+            "Cannot create strong reference, data has already been dropped. This is a bug",
         );
 
-        // Get the next available ID and increment ID counter.
+        // Get the next available ID and increment ID counter, to create the new reference id.
         let id = meta.id_counter;
         meta.id_counter += 1;
-
         let rid = RefId { file, line, id };
-        meta.strong_refs.push(rid);
 
+        // We can now store this ID and return the reference.
+        meta.strong_refs.push(rid);
         Strong {
             id: rid,
             holder: self as *const Holder<T>,
         }
     }
 
-    #[inline]
+    fn create_weak_ref(&self, file: &'static str, line: usize) -> Weak<T> {
+        let mut meta = self.meta.lock().expect("Poisoned metadata");
+
+        let id = meta.id_counter;
+        meta.id_counter += 1;
+        let rid = RefId { file, line, id };
+        meta.weak_refs.push(rid);
+        Weak {
+            id: rid,
+            holder: self as *const Holder<T>,
+        }
+    }
+
     fn drop_strong_ref(&self, id: &RefId) {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
         assert!(
@@ -142,7 +152,6 @@ impl<T> Holder<T> {
         // FIXME: Clean up remaining memory (free holder).
     }
 
-    #[inline]
     fn drop_weak_ref(&self, id: &RefId) {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
@@ -154,19 +163,25 @@ impl<T> Holder<T> {
 
 impl<T> Strong<T> {
     #[inline]
-    fn new_anonymous(data: T) -> Strong<T> {
+    pub fn new_anonymous(data: T) -> Strong<T> {
         Self::new(data, "<no location available>", 0)
     }
 
     #[inline]
-    fn new(data: T, file: &'static str, line: usize) -> Strong<T> {
+    pub fn new(data: T, file: &'static str, line: usize) -> Strong<T> {
         let holder = Box::leak(Box::new(Holder::new(data)));
         holder.create_strong_ref(file, line)
     }
 
-    fn clone(&self, file: &'static str, line: usize) -> Strong<T> {
+    pub fn clone(&self, file: &'static str, line: usize) -> Strong<T> {
         let holder = unsafe { &*self.holder };
         holder.create_strong_ref(file, line)
+    }
+}
+
+impl<T> Clone for Strong<T> {
+    fn clone(&self) -> Self {
+        self.clone("<from clone>", 0)
     }
 }
 
