@@ -44,6 +44,12 @@ struct MetaData {
     id_counter: usize,
 }
 
+impl MetaData {
+    fn should_cleanup(&self) -> bool {
+        self.strong_refs.is_empty() && self.weak_refs.is_empty()
+    }
+}
+
 #[derive(Debug)]
 struct Holder<T> {
     data: Option<Box<T>>,
@@ -78,11 +84,6 @@ impl<T> Holder<T> {
         }
     }
 
-    fn new_floating(data: T) -> *const Holder<T> {
-        let boxed = Box::new(Self::new(data));
-        Box::into_raw(boxed) as *const Holder<T>
-    }
-
     fn create_strong_ref(&self) -> usize {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
@@ -111,7 +112,7 @@ impl<T> Holder<T> {
         id
     }
 
-    fn drop_strong_ref(&self, id: usize) {
+    fn drop_strong_ref(&self, id: usize) -> bool {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
         assert!(
             self.data.is_some(),
@@ -140,18 +141,15 @@ impl<T> Holder<T> {
             // Explicit.
             drop(data);
         }
-
-        // `meta` is released here.
-
-        // FIXME: Clean up remaining memory (free holder).
+        meta.should_cleanup()
     }
 
-    fn drop_weak_ref(&self, id: usize) {
+    fn drop_weak_ref(&self, id: usize) -> bool {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         delete_from_vec(&mut meta.weak_refs, &id);
 
-        // FIXME: Clean up remaining memory (free holder).
+        meta.should_cleanup()
     }
 }
 
@@ -196,7 +194,7 @@ impl<T> Strong<T> {
     }
 
     #[inline]
-    fn clone_from(&self, file: &'static str, line: usize) -> Strong<T> {
+    pub fn clone_from(&self, file: &'static str, line: usize) -> Strong<T> {
         self.clone_with_site(Site::SourceFile { file, line })
     }
 }
@@ -221,13 +219,20 @@ impl<T> Deref for Strong<T> {
 
 impl<T> Drop for Strong<T> {
     fn drop(&mut self) {
-        unsafe { &*self.holder }.drop_strong_ref(self.id);
+        if unsafe { &*self.holder }.drop_strong_ref(self.id) {
+            // We are the last reference, we can cleanup now.
+            let holder = unsafe { Box::from_raw(self.holder as *mut Self) };
+            drop(holder);
+        }
     }
 }
 
 impl<T> Drop for Weak<T> {
     fn drop(&mut self) {
-        unsafe { &*self.holder }.drop_weak_ref(self.id);
+        if unsafe { &*self.holder }.drop_weak_ref(self.id) {
+            let holder = unsafe { Box::from_raw(self.holder as *mut Self) };
+            drop(holder);
+        }
     }
 }
 
