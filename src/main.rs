@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Deref;
 use std::sync::Mutex;
 
@@ -34,14 +35,33 @@ struct Weak<T> {
     holder: *const Holder<T>,
 }
 
-struct RefData {}
+#[derive(Debug)]
+struct MetaData {
+    strong_refs: Vec<RefId>,
+    weak_refs: Vec<RefId>,
+    id_counter: usize,
+}
 
 #[derive(Debug)]
 struct Holder<T> {
     data: Option<Box<T>>,
-    strong_refs: Mutex<Vec<RefId>>,
-    weak_refs: Mutex<Vec<RefId>>,
-    id_counter: Mutex<usize>,
+    meta: Mutex<MetaData>,
+}
+
+fn delete_from_vec<'a, T>(v: &mut Vec<T>, item: &T)
+where
+    T: fmt::Debug,
+    T: PartialEq,
+{
+    match v.iter().position(|i| i == item) {
+        None => panic!(
+            "Tried to delete {:?} from vector {:?}, but did not find it.",
+            item, v
+        ),
+        Some(idx) => {
+            v.remove(idx);
+        }
+    }
 }
 
 impl<T> Holder<T> {
@@ -49,9 +69,11 @@ impl<T> Holder<T> {
     fn new(data: T) -> Holder<T> {
         Holder {
             data: Some(Box::new(data)),
-            strong_refs: Mutex::new(Vec::new()),
-            weak_refs: Mutex::new(Vec::new()),
-            id_counter: Mutex::new(0),
+            meta: Mutex::new(MetaData {
+                strong_refs: Vec::new(),
+                weak_refs: Vec::new(),
+                id_counter: 0,
+            }),
         }
     }
 
@@ -63,10 +85,7 @@ impl<T> Holder<T> {
 
     #[inline]
     fn create_strong_ref(&self, file: &'static str, line: usize) -> Strong<T> {
-        let mut strong_refs = self
-            .strong_refs
-            .lock()
-            .expect("poisoned Holder::strong_refs");
+        let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
         assert!(
@@ -74,17 +93,12 @@ impl<T> Holder<T> {
             "Cannot create strong reference, data has already been dropped.",
         );
 
-        let mut id_counter = self
-            .id_counter
-            .lock()
-            .expect("Poisoned Holder::id_counter.");
-
         // Get the next available ID and increment ID counter.
-        let id = *id_counter;
-        *id_counter += 1;
+        let id = meta.id_counter;
+        meta.id_counter += 1;
 
         let rid = RefId { file, line, id };
-        strong_refs.push(rid);
+        meta.strong_refs.push(rid);
 
         Strong {
             id: rid,
@@ -96,25 +110,16 @@ impl<T> Holder<T> {
     fn drop_strong_ref(ptr: *const Holder<T>, id: &RefId) {
         let holder = unsafe { &mut *(ptr as *mut Holder<T>) };
 
+        let mut meta = holder.meta.lock().expect("Poisoned metadata");
         assert!(
             holder.data.is_some(),
-            "Tried dropping a strong ref, even though value has already been dropped."
+            "Tried dropping a strong ref, even though the data has already been dropped."
         );
 
-        let mut strong_refs = holder
-            .strong_refs
-            .lock()
-            .expect("Poisoned Holder::strong_refs.");
-
         // Remove from list of strong_refs.
-        let idx = strong_refs
-            .iter()
-            .position(|rid| rid == id)
-            .expect("Could not find reference while dropping strong ref.");
+        delete_from_vec(&mut meta.strong_refs, id);
 
-        strong_refs.remove(idx);
-
-        if strong_refs.is_empty() {
+        if meta.strong_refs.is_empty() {
             // There are no more references to the value, we can now drop it.
             let data = holder.data.take();
 
@@ -122,23 +127,23 @@ impl<T> Holder<T> {
             drop(data);
         }
 
-        // `strong_refs` is released here.
+        // `meta` is released here.
     }
 
     #[inline]
     fn drop_weak_ref(ptr: *const Holder<T>, id: &RefId) {
         let holder = unsafe { &mut *(ptr as *mut Holder<T>) };
 
-        // We lock `strong_refs` as well, to preserve locking order.
-        let mut _strong_refs = holder
-            .strong_refs
-            .lock()
-            .expect("Poisoned Holder::strong_refs.");
+        let mut meta = holder.meta.lock().expect("Poisoned metadata");
 
-        let weak_refs = holder
-            .weak_refs()
-            .lock()
-            .expect("poisoned Holder::strong_refs");
+        // Remove from list of strong_refs.
+        let idx = meta
+            .strong_refs
+            .iter()
+            .position(|rid| rid == id)
+            .expect("Could not find reference while dropping strong ref.");
+
+        meta.strong_refs.remove(idx);
     }
 }
 
