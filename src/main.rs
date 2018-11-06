@@ -13,7 +13,7 @@ pub enum Site {
 enum OriginKind {
     Created,
     ClonedFrom(usize, Box<Origin>),
-    // Upgraded(Box<Origin>),
+    UpgradedFrom(usize, Box<Origin>),
     DowngradedFrom(usize, Box<Origin>),
 }
 
@@ -84,22 +84,20 @@ impl<T> Holder<T> {
         }
     }
 
-    fn create_strong_ref(&self) -> usize {
+    fn create_strong_ref(&self) -> Option<usize> {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
-        // If we ever run into this assert, some invariant we assumed did not hold.
-        assert!(
-            self.data.is_some(),
-            "Cannot create strong reference, data has already been dropped. This is a bug",
-        );
+        if self.data.is_none() {
+            return None;
+        }
 
         // Get the next available ID and increment ID counter, to create the new reference id.
         let id = meta.id_counter;
 
         // We can now store this ID and return the reference.
         meta.strong_refs.push(id);
-        id
+        Some(id)
     }
 
     fn create_weak_ref(&self) -> usize {
@@ -156,7 +154,10 @@ impl<T> Holder<T> {
 impl<T> Strong<T> {
     fn new_with_site(data: T, site: Site) -> Strong<T> {
         let holder = Box::leak(Box::new(Holder::new(data)));
-        let id = holder.create_strong_ref();
+        let id = holder
+            .create_strong_ref()
+            .expect("Cannot create strong reference, data has already been dropped. This is a bug");
+
         Strong {
             id,
             origin: Origin {
@@ -171,7 +172,9 @@ impl<T> Strong<T> {
     fn clone_with_site(&self, site: Site) -> Strong<T> {
         let holder = unsafe { &*self.holder };
 
-        let new_id = holder.create_strong_ref();
+        let new_id = holder
+            .create_strong_ref()
+            .expect("Cannot clone strong reference, data has already been dropped. This is a bug");
 
         Strong {
             id: new_id,
@@ -250,6 +253,32 @@ impl<T> Drop for Strong<T> {
             let holder = unsafe { Box::from_raw(self.holder as *mut Self) };
             drop(holder);
         }
+    }
+}
+
+impl<T> Weak<T> {
+    #[inline]
+    fn upgrade_with_site(this: &Self, site: Site) -> Option<Strong<T>> {
+        let holder = unsafe { &*this.holder };
+
+        holder.create_strong_ref().map(|id| Strong {
+            holder,
+            id,
+            origin: Origin {
+                kind: OriginKind::UpgradedFrom(this.id, Box::new(this.origin.clone())),
+                site,
+            },
+        })
+    }
+
+    #[inline]
+    pub fn upgrade_from(this: &Self, file: &'static str, line: usize) -> Option<Strong<T>> {
+        Self::upgrade_with_site(this, Site::SourceFile { file, line })
+    }
+
+    #[inline]
+    pub fn upgrade(this: &Self) -> Option<Strong<T>> {
+        Self::upgrade_with_site(this, Site::Unknown)
     }
 }
 
