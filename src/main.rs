@@ -225,11 +225,11 @@ impl<T> Drop for Strong<T> {
     }
 }
 
-// impl<T> Drop for Weak<T> {
-//     fn drop(&mut self) {
-//         unsafe { &*self.holder }.drop_weak_ref(&self.id);
-//     }
-// }
+impl<T> Drop for Weak<T> {
+    fn drop(&mut self) {
+        unsafe { &*self.holder }.drop_weak_ref(self.id);
+    }
+}
 
 fn main() {
     println!("Hello, world!");
