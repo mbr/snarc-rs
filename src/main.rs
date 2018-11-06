@@ -14,7 +14,7 @@ enum OriginKind {
     Created,
     ClonedFrom(usize, Box<Origin>),
     // Upgraded(Box<Origin>),
-    // Downgraded(Box<Origin>),
+    DowngradedFrom(usize, Box<Origin>),
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +184,22 @@ impl<T> Strong<T> {
     }
 
     #[inline]
+    fn downgrade_with_site(this: &Self, site: Site) -> Weak<T> {
+        // Create new weak reference first. Downgrading always works.
+        let holder = unsafe { &*this.holder };
+
+        let id = holder.create_weak_ref();
+        Weak {
+            holder,
+            id,
+            origin: Origin {
+                kind: OriginKind::DowngradedFrom(this.id, Box::new(this.origin.clone())),
+                site,
+            },
+        }
+    }
+
+    #[inline]
     pub fn new(data: T) -> Strong<T> {
         Self::new_with_site(data, Site::Unknown)
     }
@@ -196,6 +212,16 @@ impl<T> Strong<T> {
     #[inline]
     pub fn clone_from(&self, file: &'static str, line: usize) -> Strong<T> {
         self.clone_with_site(Site::SourceFile { file, line })
+    }
+
+    #[inline]
+    pub fn downgrade_from(this: &Self, file: &'static str, line: usize) -> Weak<T> {
+        Self::downgrade_with_site(this, Site::SourceFile { file, line })
+    }
+
+    #[inline]
+    pub fn downgrade(this: &Self) -> Weak<T> {
+        Self::downgrade_with_site(this, Site::Unknown)
     }
 }
 
