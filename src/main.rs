@@ -2,20 +2,38 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::Mutex;
 
-#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct RefId {
-    file: &'static str,
-    line: usize,
+    origin: Origin,
     id: usize,
 }
 
-impl RefId {
-    pub fn file(&self) -> &'static str {
-        self.file
+impl PartialEq for RefId {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.id == rhs.id
     }
+}
 
-    pub fn line(&self) -> usize {
-        self.line
+impl Eq for RefId {}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Origin {
+    Source { file: &'static str, line: usize },
+    Anonymous,
+    UnknownClone,
+    // TODO: Backtrace
+}
+
+impl Origin {
+    #[inline]
+    pub fn from_source(file: &'static str, line: usize) -> Self {
+        Origin::Source { file, line }
+    }
+}
+
+impl RefId {
+    pub fn origin(&self) -> Origin {
+        self.origin
     }
 
     pub fn id(&self) -> usize {
@@ -81,7 +99,7 @@ impl<T> Holder<T> {
         Box::into_raw(boxed) as *const Holder<T>
     }
 
-    fn create_strong_ref(&self, file: &'static str, line: usize) -> Strong<T> {
+    fn create_strong_ref(&self, origin: Origin) -> Strong<T> {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
@@ -94,7 +112,7 @@ impl<T> Holder<T> {
         // Get the next available ID and increment ID counter, to create the new reference id.
         let id = meta.id_counter;
         meta.id_counter += 1;
-        let rid = RefId { file, line, id };
+        let rid = RefId { origin, id };
 
         // We can now store this ID and return the reference.
         meta.strong_refs.push(rid);
@@ -104,12 +122,13 @@ impl<T> Holder<T> {
         }
     }
 
-    fn create_weak_ref(&self, file: &'static str, line: usize) -> Weak<T> {
+    fn create_weak_ref(&self, origin: Origin) -> Weak<T> {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         let id = meta.id_counter;
         meta.id_counter += 1;
-        let rid = RefId { file, line, id };
+        let rid = RefId { origin, id };
+
         meta.weak_refs.push(rid);
         Weak {
             id: rid,
@@ -163,25 +182,27 @@ impl<T> Holder<T> {
 
 impl<T> Strong<T> {
     #[inline]
-    pub fn new_anonymous(data: T) -> Strong<T> {
-        Self::new(data, "<no location available>", 0)
+    pub fn new(data: T) -> Strong<T> {
+        Self::new_with_origin(data, Origin::Anonymous)
     }
 
     #[inline]
-    pub fn new(data: T, file: &'static str, line: usize) -> Strong<T> {
+    pub fn new_with_origin(data: T, origin: Origin) -> Strong<T> {
         let holder = Box::leak(Box::new(Holder::new(data)));
-        holder.create_strong_ref(file, line)
+        holder.create_strong_ref(origin)
     }
 
-    pub fn clone(&self, file: &'static str, line: usize) -> Strong<T> {
+    #[inline]
+    pub fn clone_with_origin(&self, origin: Origin) -> Strong<T> {
         let holder = unsafe { &*self.holder };
-        holder.create_strong_ref(file, line)
+        holder.create_strong_ref(origin)
     }
 }
 
 impl<T> Clone for Strong<T> {
     fn clone(&self) -> Self {
-        self.clone("<from clone>", 0)
+        let holder = unsafe { &*self.holder };
+        holder.create_strong_ref(Origin::UnknownClone)
     }
 }
 
