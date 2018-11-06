@@ -290,7 +290,3 @@ impl<T> Drop for Weak<T> {
         }
     }
 }
-
-fn main() {
-    println!("Hello, world!");
-}
