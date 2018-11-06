@@ -107,12 +107,10 @@ impl<T> Holder<T> {
     }
 
     #[inline]
-    fn drop_strong_ref(ptr: *const Holder<T>, id: &RefId) {
-        let holder = unsafe { &mut *(ptr as *mut Holder<T>) };
-
-        let mut meta = holder.meta.lock().expect("Poisoned metadata");
+    fn drop_strong_ref(&self, id: &RefId) {
+        let mut meta = self.meta.lock().expect("Poisoned metadata");
         assert!(
-            holder.data.is_some(),
+            self.data.is_some(),
             "Tried dropping a strong ref, even though the data has already been dropped."
         );
 
@@ -120,30 +118,37 @@ impl<T> Holder<T> {
         delete_from_vec(&mut meta.strong_refs, id);
 
         if meta.strong_refs.is_empty() {
+            // Here, we have to cheat the borrow checker: We know there are no strong references to
+            // this holder anymore and all weak refs have to waiting on the `meta` lock. There is
+            // also no other call to `drop_strong_ref` waiting, because those will remove themselves
+            // from the reference list before reaching this line.
+
+            // This rules out any change of cloning the value, the only chance for a new strong
+            // ref to come into existance is updating a weak ref. Weak ref's lock first, then check
+            // if the value is still present, so we should have all bases covered.
+
+            // For this reason, we sneakily upgrade our ref to drop the value:
+            let self_mut = unsafe { &mut *(self as *const Self as *mut Self) };
+
             // There are no more references to the value, we can now drop it.
-            let data = holder.data.take();
+            let data = self_mut.data.take();
 
             // Explicit.
             drop(data);
         }
 
         // `meta` is released here.
+
+        // FIXME: Clean up remaining memory (free holder).
     }
 
     #[inline]
-    fn drop_weak_ref(ptr: *const Holder<T>, id: &RefId) {
-        let holder = unsafe { &mut *(ptr as *mut Holder<T>) };
+    fn drop_weak_ref(&self, id: &RefId) {
+        let mut meta = self.meta.lock().expect("Poisoned metadata");
 
-        let mut meta = holder.meta.lock().expect("Poisoned metadata");
+        delete_from_vec(&mut meta.weak_refs, id);
 
-        // Remove from list of strong_refs.
-        let idx = meta
-            .strong_refs
-            .iter()
-            .position(|rid| rid == id)
-            .expect("Could not find reference while dropping strong ref.");
-
-        meta.strong_refs.remove(idx);
+        // FIXME: Clean up remaining memory (free holder).
     }
 }
 
@@ -179,15 +184,15 @@ impl<T> Deref for Strong<T> {
 
 impl<T> Drop for Strong<T> {
     fn drop(&mut self) {
-        Holder::drop_strong_ref(self.holder, &self.id)
+        unsafe { &*self.holder }.drop_strong_ref(&self.id);
     }
 }
 
-// impl<T> Drop for Weak<T> {
-//     fn drop(&mut self) {
-//         Holder::drop_weak_ref(self.holder, &self.id)
-//     }
-// }
+impl<T> Drop for Weak<T> {
+    fn drop(&mut self) {
+        unsafe { &*self.holder }.drop_weak_ref(&self.id);
+    }
+}
 
 fn main() {
     println!("Hello, world!");
