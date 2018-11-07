@@ -131,7 +131,7 @@ impl<T> Snarc<T> {
     /// Internal cloning function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
-    /// `OriginKind::ClonedFrom`.
+    /// `OriginKind::Cloned`.
     fn clone_at_site(&self, site: Site) -> Snarc<T> {
         let mut map = self.inner.map.lock().unwrap();
         let parent_origin = map
@@ -140,7 +140,7 @@ impl<T> Snarc<T> {
             .expect("Internal consistency error (clone). This should never happen.")
             .clone();
         let new_origin = Origin {
-            kind: OriginKind::ClonedFrom(self.id, Box::new(parent_origin)),
+            kind: OriginKind::Cloned(self.id, Box::new(parent_origin)),
             site,
         };
         let new_id = map.next_id();
@@ -155,7 +155,7 @@ impl<T> Snarc<T> {
     /// Internal downgrade function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
-    /// `OriginKind::DowngradedFrom`.
+    /// `OriginKind::Downgraded`.
     fn downgrade_at_site(this: &Self, site: Site) -> Weak<T> {
         let mut map = this.inner.map.lock().unwrap();
         // No need to `::remove` here because the strong ref will be dropped.
@@ -165,7 +165,7 @@ impl<T> Snarc<T> {
             .expect("Internal consistency error (downgrade). This should never happen.")
             .clone();
         let new_origin = Origin {
-            kind: OriginKind::DowngradedFrom(this.id, Box::new(prev_origin)),
+            kind: OriginKind::Downgraded(this.id, Box::new(prev_origin)),
             site,
         };
         let new_id = map.next_id();
@@ -297,7 +297,7 @@ impl<T> Weak<T> {
     /// Internal upgrade function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
-    /// `OriginKind::UpgradedFrom`.
+    /// `OriginKind::Upgraded`.
     pub fn upgrade_at_site(&self, site: Site) -> Option<Snarc<T>> {
         let id = self.id?;
 
@@ -310,7 +310,7 @@ impl<T> Weak<T> {
                     .expect("Internal consistency error (upgrade)")
                     .clone();
                 let new_origin = Origin {
-                    kind: OriginKind::UpgradedFrom(id, Box::new(prev_origin)),
+                    kind: OriginKind::Upgraded(id, Box::new(prev_origin)),
                     site,
                 };
                 let new_id = map.next_id();
@@ -324,7 +324,7 @@ impl<T> Weak<T> {
     /// Internal cloning function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
-    /// `OriginKind::ClonedFrom`.
+    /// `OriginKind::Cloned`.
     fn clone_at_site(&self, site: Site) -> Weak<T> {
         // We need to create a temporary untracked strong reference here, no way around it.
         //
@@ -348,7 +348,7 @@ impl<T> Weak<T> {
                     .expect("Internal consistency error (weak clone). This should never happen.")
                     .clone();
                 let new_origin = Origin {
-                    kind: OriginKind::ClonedFrom(our_id, Box::new(parent_origin)),
+                    kind: OriginKind::Cloned(our_id, Box::new(parent_origin)),
                     site,
                 };
                 let new_id = map.next_id();

@@ -43,11 +43,11 @@ pub enum OriginKind {
     // FIXME: IDs need to be for current, not passed down.
     // FIXME: Move ID into Origin.
     /// Cloned from another reference, (original ID, site of original reference).
-    ClonedFrom(Uid, Box<Origin>),
+    Cloned(Uid, Box<Origin>),
     /// Upgraded from a weak reference, (weak reference ID, site of weak reference).
-    UpgradedFrom(Uid, Box<Origin>),
+    Upgraded(Uid, Box<Origin>),
     /// Downgraded from a strong reference, (strong reference ID, site of strong reference).
-    DowngradedFrom(Uid, Box<Origin>),
+    Downgraded(Uid, Box<Origin>),
 }
 
 /// Describes origin and location of a new reference creation.
@@ -70,15 +70,15 @@ impl fmt::Display for Origin {
                     write!(f, "new<{}>[{}]", id, link.site)?;
                     cur = None;
                 }
-                OriginKind::ClonedFrom(id, ref parent) => {
+                OriginKind::Cloned(id, ref parent) => {
                     write!(f, "clone<{}>[{}]", id, link.site)?;
                     cur = Some(parent);
                 }
-                OriginKind::UpgradedFrom(id, ref parent) => {
+                OriginKind::Upgraded(id, ref parent) => {
                     write!(f, "upgrade<{}>[{}]", id, link.site)?;
                     cur = Some(parent);
                 }
-                OriginKind::DowngradedFrom(id, ref parent) => {
+                OriginKind::Downgraded(id, ref parent) => {
                     write!(f, "downgrade<{}>[{}]", id, link.site)?;
                     cur = Some(parent);
                 }
@@ -135,17 +135,17 @@ mod tests {
         };
 
         let two = Origin {
-            kind: OriginKind::ClonedFrom(1, Box::new(one)),
+            kind: OriginKind::Cloned(1, Box::new(one)),
             site: Site::Annotated("step two".to_string()),
         };
 
         let three = Origin {
-            kind: OriginKind::DowngradedFrom(2, Box::new(two)),
+            kind: OriginKind::Downgraded(2, Box::new(two)),
             site: Site::Unknown,
         };
 
         let four = Origin {
-            kind: OriginKind::UpgradedFrom(3, Box::new(three)),
+            kind: OriginKind::Upgraded(3, Box::new(three)),
             site: Site::SourceFile {
                 file: "final.rs",
                 line: 42,
