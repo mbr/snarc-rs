@@ -79,7 +79,7 @@ pub struct Weak<T> {
     /// Wrapped non-owned [std::sync] arc reference.
     inner: ArcWeak<Inner<T>>,
     /// Unique ID for this instance.
-    id: Uid,
+    id: Option<Uid>,
 }
 
 impl<T> Snarc<T> {
@@ -150,7 +150,7 @@ impl<T> Snarc<T> {
 
         Weak {
             inner: Arc::downgrade(&this.inner),
-            id: new_id,
+            id: Some(new_id),
         }
     }
 
@@ -232,22 +232,30 @@ impl<T> Drop for Snarc<T> {
     }
 }
 
+impl<T> Clone for Snarc<T> {
+    fn clone(&self) -> Self {
+        self.clone_at_site(Site::Unknown)
+    }
+}
+
 impl<T> Weak<T> {
     /// Internal upgrade function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
     /// `OriginKind::UpgradedFrom`.
     pub fn upgrade_at_site(&self, site: Site) -> Option<Snarc<T>> {
+        let id = self.id?;
+
         self.inner.upgrade().map(|inner| {
             let id = {
                 let mut map = inner.map.lock().unwrap();
                 let prev_origin = map
                     .weaks
-                    .get(&self.id)
+                    .get(&id)
                     .expect("Internal consistency error (upgrade)")
                     .clone();
                 let new_origin = Origin {
-                    kind: OriginKind::UpgradedFrom(self.id, Box::new(prev_origin)),
+                    kind: OriginKind::UpgradedFrom(id, Box::new(prev_origin)),
                     site,
                 };
                 let new_id = map.next_id();
@@ -256,6 +264,55 @@ impl<T> Weak<T> {
             };
             Snarc { inner, id }
         })
+    }
+
+    /// Internal cloning function.
+    ///
+    /// Directly accepts a `Site` instance, creates the correct `Origin` with
+    /// `OriginKind::ClonedFrom`.
+    fn clone_at_site(&self, site: Site) -> Weak<T> {
+        // We need to create a temporary untracked strong reference here, no way around it.
+        //
+        // The issue is that we need access to the data, which might be gone already, real `Weak`s
+        // never have this issue.
+
+        match self.inner.upgrade() {
+            Some(strong) => {
+                // The accompanying strong reference still exists, so we can perform a "proper"
+                // clone.
+                let mut map = strong.map.lock().unwrap();
+
+                let our_id = self.id.expect(
+                    "Succesfully upgraded a weak reference, but it has no ID.\
+                     This should never happen.",
+                );
+
+                let parent_origin = map
+                    .weaks
+                    .get(&our_id)
+                    .expect("Internal consistency error (weak clone). This should never happen.")
+                    .clone();
+                let new_origin = Origin {
+                    kind: OriginKind::ClonedFrom(our_id, Box::new(parent_origin)),
+                    site,
+                };
+                let new_id = map.next_id();
+                map.weaks.insert(new_id, new_origin);
+
+                Weak {
+                    inner: self.inner.clone(),
+                    id: Some(new_id),
+                }
+            }
+            None => {
+                // We cloned a dead weak ref. We already lost all of our tracking info, so there
+                // is nothing we can do. Just hand out a weak ref, with no ID.
+                Weak {
+                    inner: self.inner.clone(),
+                    id: None,
+                }
+            }
+        }
     }
 
     /// Attempts to upgrade the Weak pointer to an Arc, extending the lifetime of the value if
@@ -271,14 +328,22 @@ impl<T> Drop for Weak<T> {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
             let mut map = inner.map.lock().unwrap();
+            let our_id = self
+                .id
+                .expect("No ID on alive weak reference in drop. This is a bug.");
+
             map.weaks
-                .remove(&self.id)
-                .expect("Internal consistency error (drop)");
+                .remove(&our_id)
+                .expect("Internal consistency error (drop). This is a bug.");
         }
     }
 }
 
-// TODO: Implement Clone for Weak.
+impl<T> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        self.clone_at_site(Site::Unknown)
+    }
+}
 
 #[cfg(test)]
 mod tests {
