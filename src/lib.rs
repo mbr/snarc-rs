@@ -40,8 +40,10 @@
 pub mod tracing;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, Weak as ArcWeak};
+
 use tracing::{Origin, OriginKind, Site, Uid};
 
 /// A 'snitching' atomically reference counted pointer.
@@ -441,6 +443,52 @@ impl<T> Drop for Weak<T> {
 impl<T> Clone for Weak<T> {
     fn clone(&self) -> Self {
         self.clone_at_site(Site::Unknown)
+    }
+}
+
+/// Output helper.
+///
+/// The `Dump` struct can be used as a zero-sized wrapper to output a `Snarc`. Example:
+///
+/// ```rust
+/// use snarc::{Dump, Snarc};
+///
+/// let foo = Snarc::new(123);
+/// let bar = Snarc::clone_at_line(&foo, file!(), line!());
+/// let weak = Snarc::downgrade(&bar);
+///
+/// println!("{}", Dump(&bar));
+/// ```
+///
+/// The resulting output will be something resembling:
+///
+/// ```ignore
+/// Family associated with ID: 1
+/// S| new<0>[?]
+/// S| clone<1>[src/lib.rs:475] <- new<0>[?]
+/// W| downgrade<2>[?] <- clone<1>[src/lib.rs:475] <- new<0>[?]
+/// ```
+#[derive(Debug)]
+pub struct Dump<'a, T: 'a>(pub &'a Snarc<T>);
+
+impl<'a, T: 'a> fmt::Display for Dump<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Family associated with ID: {}", self.0.id)?;
+
+        let (mut strongs, mut weaks) = Snarc::family(self.0);
+
+        // Sort by ID.
+        strongs.sort();
+        weaks.sort();
+
+        for strong in strongs {
+            writeln!(f, "S| {}", strong);
+        }
+        for weak in weaks {
+            writeln!(f, "W| {}", weak);
+        }
+
+        Ok(())
     }
 }
 

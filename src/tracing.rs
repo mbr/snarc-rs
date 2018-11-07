@@ -8,7 +8,7 @@ use std::fmt;
 pub type Uid = usize;
 
 /// Call site.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Ord, Eq)]
 pub enum Site {
     /// File/line location inside a source file.
     SourceFile {
@@ -36,7 +36,7 @@ impl fmt::Display for Site {
 }
 
 /// Reference origin.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Ord, Eq)]
 pub enum OriginKind {
     /// New object Instantiation (resulting ID),
     New,
@@ -51,15 +51,15 @@ pub enum OriginKind {
 }
 
 /// Describes origin and location of a new reference creation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Ord, Eq)]
 pub struct Origin {
+    /// The resulting ID of the instantiation.
+    pub id: Uid,
+    /// The site where the new instation occured.
+    pub site: Site,
     /// The kind of reference creation (new, via clone, downgrade, ...). In case there is a parent
     /// instance, its origin information will be contained in the `OriginKind` instance.
     pub kind: OriginKind,
-    /// The site where the new instation occured.
-    pub site: Site,
-    /// The resulting ID of the instantiation.
-    pub id: Uid,
 }
 
 impl fmt::Display for Origin {
