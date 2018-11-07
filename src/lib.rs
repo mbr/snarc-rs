@@ -259,6 +259,37 @@ impl<T> Snarc<T> {
     pub fn get_mut(this: &mut Snarc<T>) -> Option<&mut T> {
         Arc::get_mut(&mut this.inner).map(|inner| &mut inner.data)
     }
+
+    /// Returns the origin chain of this reference.
+    ///
+    /// The resulting `Origin` can be printed using `fmt::Display`, see the `tracing` docs for
+    /// details.
+    pub fn origin(this: &Snarc<T>) -> Origin {
+        this.inner
+            .map
+            .lock()
+            .expect("Poisoned strong mapping. This is a bug.")
+            .strongs
+            .get(&this.id)
+            .expect("Internal consisency error (origin). This is a bug.")
+            .clone()
+    }
+
+    /// Returns the origin of the reference and all of its siblings.
+    ///
+    /// Returns a tuple of (strong origins, weak origins), including all live references.
+    pub fn family(this: &Snarc<T>) -> (Vec<Origin>, Vec<Origin>) {
+        let map = this
+            .inner
+            .map
+            .lock()
+            .expect("Poisoned strong mapping. This is a bug.");
+
+        (
+            map.strongs.values().cloned().collect(),
+            map.weaks.values().cloned().collect(),
+        )
+    }
 }
 
 impl<T> Snarc<T>
