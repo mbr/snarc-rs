@@ -1,6 +1,6 @@
 [package]
 name = "snarc"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Marc Brinkmann <git@marcbrinkmann.de>"]
 license = "MIT"
 description = "A snitching `Arc` replacement; allows tracking down runaway references."
