@@ -159,14 +159,29 @@ impl<T> Snarc<T> {
         Snarc::new_at_site(data, Site::SourceFile { file, line })
     }
 
-    /// Creates a new `Weak` pointer to this value.
+    /// Creates new `Snarc` with unknown origin.
+    ///
+    /// If possible, use `new_at_line` instead.
+    pub fn new(data: T) -> Snarc<T> {
+        Snarc::new_at_site(data, Site::Unknown)
+    }
+
+    /// Clones `Snarc` with the provided file name and line as the origin.
     pub fn clone_at_line(&self, file: &'static str, line: u32) -> Snarc<T> {
         self.clone_at_site(Site::SourceFile { file, line })
     }
 
-    /// Creates a new `Weak` pointer to this value.
+    /// Creates a new `Weak` pointer to this value with the provided file name and line as the
+    /// origin.
     pub fn downgrade_at_line(this: &Self, file: &'static str, line: u32) -> Weak<T> {
         Snarc::downgrade_at_site(this, Site::SourceFile { file, line })
+    }
+
+    /// Creates a new `Weak` pointer to this value.
+    ///
+    /// If possible, use `new_at_line` instead.
+    pub fn downgrade(this: &Self) -> Weak<T> {
+        Snarc::downgrade_at_site(this, Site::Unknown)
     }
 
     /// Returns the contained value if the `Snarc` has exactly one strong reference.
@@ -321,6 +336,14 @@ impl<T> Weak<T> {
     /// See `std::sync::Weak::upgrade` for details.
     pub fn upgrade_at_line(&self, file: &'static str, line: u32) -> Option<Snarc<T>> {
         self.upgrade_at_site(Site::SourceFile { file, line })
+    }
+
+    /// Attempts to upgrade the Weak pointer to an Arc, extending the lifetime of the value if
+    /// successful.
+    ///
+    /// If possible, use `upgrade_at_line` instead.
+    pub fn upgrade(&self, file: &'static str, line: u32) -> Option<Snarc<T>> {
+        self.upgrade_at_site(Site::Unknown)
     }
 }
 
