@@ -1,9 +1,5 @@
 //! A 'snitching' atomically reference counted pointer.
 
-use std::fmt;
-use std::ops::Deref;
-use std::sync::Mutex;
-
 pub type Uid = usize;
 
 #[derive(Debug, Copy, Clone)]

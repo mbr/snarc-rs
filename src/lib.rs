@@ -10,8 +10,6 @@
 //!
 //! TODO: Example on how to use.
 
-#![allow(dead_code, unused_imports, unused_variables)]
-
 pub mod tracing;
 
 use std::collections::HashMap;
@@ -154,23 +152,23 @@ impl<T> Narc<T> {
     //         .map_err(|i| Narc { inner: i })
     // }
 
-    pub fn weak_count(this: &Narc<T>) -> usize {
+    pub fn weak_count(_this: &Narc<T>) -> usize {
         unimplemented!()
     }
 
-    pub fn strong_count(this: &Narc<T>) -> usize {
+    pub fn strong_count(_this: &Narc<T>) -> usize {
         unimplemented!()
     }
 
-    pub fn ptr_eq(this: &Narc<T>, other: &Narc<T>) -> bool {
+    pub fn ptr_eq(_this: &Narc<T>, _other: &Narc<T>) -> bool {
         unimplemented!()
     }
 
-    pub fn make_mut(this: &mut Narc<T>) -> &mut T {
+    pub fn make_mut(_this: &mut Narc<T>) -> &mut T {
         unimplemented!()
     }
 
-    pub fn get_mut(this: &mut Narc<T>) -> Option<&mut T> {
+    pub fn get_mut(_this: &mut Narc<T>) -> Option<&mut T> {
         unimplemented!()
     }
 }
