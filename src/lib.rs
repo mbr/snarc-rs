@@ -359,7 +359,7 @@ impl<T> Weak<T> {
     /// successful.
     ///
     /// If possible, use `upgrade_at_line` instead.
-    pub fn upgrade(&self, file: &'static str, line: u32) -> Option<Snarc<T>> {
+    pub fn upgrade(&self) -> Option<Snarc<T>> {
         self.upgrade_at_site(Site::Unknown)
     }
 }
