@@ -13,7 +13,29 @@
 //! like `new_at_line` or `clone_at_line` should be used. In case the compatible methods like `new`,
 //! `clone`, ... are called, `Site::Unknown` is used for the resulting tracked `Origin`.
 //!
-//! TODO: Example on how to use, including `file!` and `line!` macros.
+//! ```rust
+//! use snarc::Snarc;
+//!
+//! // Snarc keeps track of every instatiation, clone, upgrade and downgrade:
+//! let foo = Snarc::new_at_line(vec![1.0, 2.0, 3.0], file!(), line!());
+//!
+//! // A file/line annotated clone of the reference. The new reference will have a record
+//! // of its origin and the line where the cloning happened.
+//! let a = foo.clone_at_line(file!(), line!());
+//!
+//! // "Regular" clone. This will not record file and line information.
+//! let b = Snarc::clone(&foo);
+//! ```
+//!
+//! In most cases, `Snarc` can be used as a quick drop-in replacement:
+//!
+//! ```rust
+//! use snarc::Snarc as Arc;
+//!
+//! let bar = Arc::new(vec![1.0, 2.0, 3.0]);
+//! ```
+//!
+//! This form allows only some instances to be annotated, or annotations being added gradually.
 
 pub mod tracing;
 
