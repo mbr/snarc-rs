@@ -1,323 +1,254 @@
 //! A 'snitching' atomically reference counted pointer.
+//!
+//! [`Narc`]s are almost transparent wrappers around atomic reference counts ([`std::sync::Arc`])
+//! that track where references originated from. By recording the initial creation, as well as any
+//! operation that results in a new reference, such as a cloning or downgrading, any reference is
+//! always able to tell what its siblings pointing to the same value are.
+//!
+//! This functionality is useful for manually tracking down reference cycles or other causes that
+//! prevent proper clean-up, which occasionally result in deadlocks.
+//!
+//! TODO: Example on how to use.
 
-pub mod narc;
+#![allow(dead_code, unused_imports, unused_variables)]
 
-use std::fmt;
+pub mod tracing;
+
+use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak as ArcWeak};
+use tracing::{Origin, OriginKind, Site, Uid};
 
-type Uid = usize;
-
-#[derive(Debug, Copy, Clone)]
-pub enum Site {
-    SourceFile { file: &'static str, line: u32 },
-    Unknown,
-    // TODO: Backtrace,
-}
-
-#[derive(Debug, Clone)]
-enum OriginKind {
-    New,
-    ClonedFrom(Uid, Box<Origin>),
-    UpgradedFrom(Uid, Box<Origin>),
-    DowngradedFrom(Uid, Box<Origin>),
-}
-
-#[derive(Debug, Clone)]
-pub struct Origin {
-    kind: OriginKind,
-    site: Site,
-}
+/// A 'snitching' atomically reference counted pointer.
+///
+/// A `Narc` wraps an actual `Arc` and assigns it a unique ID upon creation. Any offspring of
+/// created via `clone` or `downgrade` is tracked by being assigned a unique ID as well. If the
+/// annotating methods `new_at_line`, `clone_at_line`, etc. are used, the `Narc` will also know
+/// its origin.
 
 #[derive(Debug)]
-pub struct Strong<T> {
+pub struct Narc<T> {
+    inner: Arc<Inner<T>>,
     id: Uid,
-    origin: Origin,
-    holder: *const Holder<T>,
 }
 
 #[derive(Debug)]
-pub struct Weak<T> {
-    id: Uid,
-    origin: Origin,
-    holder: *const Holder<T>,
+struct Map {
+    strongs: HashMap<Uid, Origin>,
+    weaks: HashMap<Uid, Origin>,
+    next_id: Uid,
 }
 
-#[derive(Debug)]
-struct Metadata {
-    strong_refs: Vec<Uid>,
-    weak_refs: Vec<Uid>,
-    id_counter: Uid,
-}
-
-impl Metadata {
-    fn new() -> Metadata {
-        Metadata {
-            strong_refs: Vec::new(),
-            weak_refs: Vec::new(),
-            id_counter: 0,
+impl Map {
+    fn new() -> Map {
+        Map {
+            strongs: HashMap::with_capacity(128),
+            weaks: HashMap::with_capacity(128),
+            next_id: 0,
         }
     }
 
-    fn should_cleanup(&self) -> bool {
-        self.strong_refs.is_empty() && self.weak_refs.is_empty()
-    }
-}
-
-#[derive(Debug)]
-struct Holder<T> {
-    data: Option<Box<T>>,
-    meta: Mutex<Metadata>,
-}
-
-fn delete_from_vec<'a, T>(v: &mut Vec<T>, item: &T)
-where
-    T: fmt::Debug,
-    T: PartialEq,
-{
-    match v.iter().position(|i| i == item) {
-        None => panic!(
-            "Tried to delete {:?} from vector {:?}, but did not find it.",
-            item, v
-        ),
-        Some(idx) => {
-            v.remove(idx);
-        }
-    }
-}
-
-impl<T> Holder<T> {
-    fn new(data: T) -> Holder<T> {
-        Holder {
-            data: Some(Box::new(data)),
-            meta: Mutex::new(Metadata::new()),
-        }
-    }
-
-    fn create_strong_ref(&self) -> Option<Uid> {
-        let mut meta = self.meta.lock().expect("Poisoned metadata");
-
-        // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
-        if self.data.is_none() {
-            return None;
-        }
-
-        // Get the next available ID and increment ID counter, to create the new reference id.
-        let id = meta.id_counter;
-
-        // We can now store this ID and return the reference.
-        meta.strong_refs.push(id);
-        Some(id)
-    }
-
-    fn create_weak_ref(&self) -> Uid {
-        let mut meta = self.meta.lock().expect("Poisoned metadata");
-
-        let id = meta.id_counter;
-        meta.id_counter += 1;
-
-        meta.weak_refs.push(id);
+    // Increments the `next_id` counter and returns the previous value.
+    fn next_id(&mut self) -> Uid {
+        let id = self.next_id;
+        self.next_id += 1;
         id
     }
-
-    fn drop_strong_ref(&self, id: Uid) -> bool {
-        let mut meta = self.meta.lock().expect("Poisoned metadata");
-        assert!(
-            self.data.is_some(),
-            "Tried dropping a strong ref, even though the data has already been dropped."
-        );
-
-        // Remove from list of strong_refs.
-        delete_from_vec(&mut meta.strong_refs, &id);
-
-        if meta.strong_refs.is_empty() {
-            // Here, we have to cheat the borrow checker: We know there are no strong references to
-            // this holder anymore and all weak refs have to waiting on the `meta` lock. There is
-            // also no other call to `drop_strong_ref` waiting, because those will remove themselves
-            // from the reference list before reaching this line.
-
-            // This rules out any change of cloning the value, the only chance for a new strong
-            // ref to come into existance is updating a weak ref. Weak ref's lock first, then check
-            // if the value is still present, so we should have all bases covered.
-
-            // For this reason, we sneakily upgrade our ref to drop the value:
-            let self_mut = unsafe { &mut *(self as *const Self as *mut Self) };
-
-            // There are no more references to the value, we can now drop it.
-            let data = self_mut.data.take();
-
-            // Explicit.
-            drop(data);
-        }
-        meta.should_cleanup()
-    }
-
-    fn drop_weak_ref(&self, id: Uid) -> bool {
-        let mut meta = self.meta.lock().expect("Poisoned metadata");
-
-        delete_from_vec(&mut meta.weak_refs, &id);
-
-        meta.should_cleanup()
-    }
 }
 
-impl<T> Strong<T> {
-    fn new_with_site(data: T, site: Site) -> Strong<T> {
-        let holder = Box::leak(Box::new(Holder::new(data)));
-        let id = holder
-            .create_strong_ref()
-            .expect("Cannot create strong reference, data has already been dropped. This is a bug");
+#[derive(Debug)]
+struct Inner<T> {
+    data: T,
+    map: Mutex<Map>,
+}
 
-        Strong {
+/// The non-owned version of a `Narc`.
+#[derive(Debug)]
+pub struct Weak<T> {
+    inner: ArcWeak<Inner<T>>,
+    id: Uid,
+}
+
+impl<T> Narc<T> {
+    fn new_at_site(data: T, site: Site) -> Narc<T> {
+        let origin = Origin {
+            kind: OriginKind::New,
+            site,
+        };
+
+        let mut map = Map::new();
+        let id = map.next_id();
+        map.strongs.insert(id, origin);
+
+        Narc {
+            inner: Arc::new(Inner {
+                data,
+                map: Mutex::new(map),
+            }),
             id,
-            origin: Origin {
-                site,
-                kind: OriginKind::New,
-            },
-            holder,
         }
     }
 
-    #[inline]
-    fn clone_with_site(&self, site: Site) -> Strong<T> {
-        let holder = unsafe { &*self.holder };
+    fn clone_at_site(&self, site: Site) -> Narc<T> {
+        let mut map = self.inner.map.lock().unwrap();
+        let parent_origin = map
+            .strongs
+            .get(&self.id)
+            .expect("Internal consistency error (clone)")
+            .clone();
+        let new_origin = Origin {
+            kind: OriginKind::ClonedFrom(self.id, Box::new(parent_origin)),
+            site,
+        };
+        let new_id = map.next_id();
+        map.strongs.insert(new_id, new_origin);
 
-        let new_id = holder
-            .create_strong_ref()
-            .expect("Cannot clone strong reference, data has already been dropped. This is a bug");
-
-        Strong {
+        Narc {
+            inner: self.inner.clone(),
             id: new_id,
-            holder,
-            origin: Origin {
-                kind: OriginKind::ClonedFrom(self.id, Box::new(self.origin.clone())),
-                site: site,
-            },
         }
     }
 
-    #[inline]
-    fn downgrade_with_site(this: &Self, site: Site) -> Weak<T> {
-        // Create new weak reference first. Downgrading always works.
-        let holder = unsafe { &*this.holder };
+    fn downgrade_at_site(this: &Self, site: Site) -> Weak<T> {
+        let mut map = this.inner.map.lock().unwrap();
+        // No need to `::remove` here because the strong ref will be dropped.
+        let prev_origin = map
+            .strongs
+            .get(&this.id)
+            .expect("Internal consistency error (downgrade)")
+            .clone();
+        let new_origin = Origin {
+            kind: OriginKind::DowngradedFrom(this.id, Box::new(prev_origin)),
+            site,
+        };
+        let new_id = map.next_id();
+        map.weaks.insert(new_id, new_origin);
 
-        let id = holder.create_weak_ref();
         Weak {
-            holder,
-            id,
-            origin: Origin {
-                kind: OriginKind::DowngradedFrom(this.id, Box::new(this.origin.clone())),
-                site,
-            },
+            inner: Arc::downgrade(&this.inner),
+            id: new_id,
         }
     }
 
-    #[inline]
-    pub fn new(data: T) -> Strong<T> {
-        Self::new_with_site(data, Site::Unknown)
+    /// Returns a new `Narc` with the provided file name and line as the 'origin'.
+    pub fn new_at_line(data: T, file: &'static str, line: u32) -> Narc<T> {
+        Narc::new_at_site(data, Site::SourceFile { file, line })
     }
 
-    #[inline]
-    pub fn new_from(data: T, file: &'static str, line: u32) -> Strong<T> {
-        Self::new_with_site(data, Site::SourceFile { file, line })
+    /// Creates a new [`Weak`][weak] pointer to this value.
+    pub fn clone_at_line(&self, file: &'static str, line: u32) -> Narc<T> {
+        self.clone_at_site(Site::SourceFile { file, line })
     }
 
-    #[inline]
-    pub fn clone_from(&self, file: &'static str, line: u32) -> Strong<T> {
-        self.clone_with_site(Site::SourceFile { file, line })
+    /// Creates a new [`Weak`][weak] pointer to this value.
+    pub fn downgrade_at_line(this: &Self, file: &'static str, line: u32) -> Weak<T> {
+        Narc::downgrade_at_site(this, Site::SourceFile { file, line })
     }
 
-    #[inline]
-    pub fn downgrade_from(this: &Self, file: &'static str, line: u32) -> Weak<T> {
-        Self::downgrade_with_site(this, Site::SourceFile { file, line })
+    // TODO: Come up with a clever way to impl this.
+    //
+    // /// Returns the contained value if the `Narc` has exactly one strong reference.
+    // pub fn try_unwrap(this: Self) -> Result<T, Self> {
+    //     Arc::try_unwrap(this.inner)
+    //         .map(|i| i.data)
+    //         .map_err(|i| Narc { inner: i })
+    // }
+
+    pub fn weak_count(this: &Narc<T>) -> usize {
+        unimplemented!()
     }
 
-    #[inline]
-    pub fn downgrade(this: &Self) -> Weak<T> {
-        Self::downgrade_with_site(this, Site::Unknown)
+    pub fn strong_count(this: &Narc<T>) -> usize {
+        unimplemented!()
+    }
+
+    pub fn ptr_eq(this: &Narc<T>, other: &Narc<T>) -> bool {
+        unimplemented!()
+    }
+
+    pub fn make_mut(this: &mut Narc<T>) -> &mut T {
+        unimplemented!()
+    }
+
+    pub fn get_mut(this: &mut Narc<T>) -> Option<&mut T> {
+        unimplemented!()
     }
 }
 
-impl<T> Clone for Strong<T> {
-    fn clone(&self) -> Self {
-        self.clone_with_site(Site::Unknown)
-    }
-}
-
-impl<T> Deref for Strong<T> {
+impl<T: Deref> Deref for Narc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let holder = unsafe { &*self.holder };
-        &holder.data.as_ref().expect(
-            "Encountered a missing value inside a holder while dereferencing a strong ref. \
-             This is a bug!",
-        )
+        &self.inner.data
     }
 }
 
-impl<T> Drop for Strong<T> {
+impl<T> Drop for Narc<T> {
     fn drop(&mut self) {
-        if unsafe { &*self.holder }.drop_strong_ref(self.id) {
-            // We are the last reference, we can cleanup now.
-            let holder = unsafe { Box::from_raw(self.holder as *mut Self) };
-            drop(holder);
-        }
+        let mut map = self.inner.map.lock().unwrap();
+        map.strongs
+            .remove(&self.id)
+            .expect("Internal consistency error (drop)");
     }
 }
 
 impl<T> Weak<T> {
-    #[inline]
-    fn upgrade_with_site(this: &Self, site: Site) -> Option<Strong<T>> {
-        let holder = unsafe { &*this.holder };
-
-        holder.create_strong_ref().map(|id| Strong {
-            holder,
-            id,
-            origin: Origin {
-                kind: OriginKind::UpgradedFrom(this.id, Box::new(this.origin.clone())),
-                site,
-            },
+    pub fn upgrade_at_site(&self, site: Site) -> Option<Narc<T>> {
+        self.inner.upgrade().map(|inner| {
+            let id = {
+                let mut map = inner.map.lock().unwrap();
+                let prev_origin = map
+                    .weaks
+                    .get(&self.id)
+                    .expect("Internal consistency error (upgrade)")
+                    .clone();
+                let new_origin = Origin {
+                    kind: OriginKind::UpgradedFrom(self.id, Box::new(prev_origin)),
+                    site,
+                };
+                let new_id = map.next_id();
+                map.strongs.insert(new_id, new_origin);
+                new_id
+            };
+            Narc { inner, id }
         })
     }
 
-    #[inline]
-    pub fn upgrade_from(this: &Self, file: &'static str, line: u32) -> Option<Strong<T>> {
-        Self::upgrade_with_site(this, Site::SourceFile { file, line })
-    }
-
-    #[inline]
-    pub fn upgrade(this: &Self) -> Option<Strong<T>> {
-        Self::upgrade_with_site(this, Site::Unknown)
+    pub fn upgrade_at_line(&self, file: &'static str, line: u32) -> Option<Narc<T>> {
+        self.upgrade_at_site(Site::SourceFile { file, line })
     }
 }
 
 impl<T> Drop for Weak<T> {
     fn drop(&mut self) {
-        if unsafe { &*self.holder }.drop_weak_ref(self.id) {
-            let holder = unsafe { Box::from_raw(self.holder as *mut Self) };
-            drop(holder);
+        if let Some(inner) = self.inner.upgrade() {
+            let mut map = inner.map.lock().unwrap();
+            map.weaks
+                .remove(&self.id)
+                .expect("Internal consistency error (drop)");
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(dead_code)]
+    use super::Narc;
 
-    // This import should definitely be able to take care of business:
-    use super::Strong;
-
-    // TODO: Uncomment
-    //
-    // #[test]
+    #[test]
     fn basic() {
         let thing = ();
+        let thing_strong_0 = Narc::new_at_line(thing, file!(), line!());
+        let thing_strong_1 = thing_strong_0.clone_at_line(file!(), line!());
+        let thing_weak_0 = Narc::downgrade_at_line(&thing_strong_0, file!(), line!());
+        let thing_weak_1 = Narc::downgrade_at_line(&thing_strong_0, file!(), line!());
+        let thing_strong_2 = thing_weak_0.upgrade_at_line(file!(), line!());
 
-        let thing_strong_0 = Strong::new_from(thing, file!(), line!());
-        let thing_strong_1 = thing_strong_0.clone_from(file!(), line!());
+        println!("\nthing_strong_0: {:?}", thing_strong_0);
+        println!("\nthing_strong_1: {:?}", thing_strong_1);
+        println!("\nthing_weak_0: {:?}", thing_weak_0);
+        println!("\nthing_weak_1: {:?}", thing_weak_0);
+        println!("\nthing_strong_2: {:?}", thing_strong_2);
 
-        println!("thing_strong_0: {:?}", thing_strong_0);
-        println!("thing_strong_1: {:?}", thing_strong_1);
+        // TODO: Actually check something.
     }
 }
