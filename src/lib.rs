@@ -109,13 +109,14 @@ impl<T> Snarc<T> {
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with `OriginKind::New`.
     fn new_at_site(data: T, site: Site) -> Snarc<T> {
+        let mut map = Map::new();
+        let id = map.next_id();
+
         let origin = Origin {
-            kind: OriginKind::New,
+            kind: OriginKind::New(id),
             site,
         };
 
-        let mut map = Map::new();
-        let id = map.next_id();
         map.strongs.insert(id, origin);
 
         Snarc {

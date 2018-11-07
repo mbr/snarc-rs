@@ -20,14 +20,26 @@ pub enum Site {
     /// Used, when no information about the original call site was available at runtime.
     Unknown,
     // TODO: Backtrace,
-    // TODO: Annotation,
+    Annotated(String),
+}
+
+impl fmt::Display for Site {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Site::SourceFile { file, line } => write!(f, "{}:{}", file, line),
+            Site::Unknown => write!(f, "?"),
+            Site::Annotated(ref s) => write!(f, "\"{}\"", s),
+        }
+    }
 }
 
 /// Reference origin.
 #[derive(Debug, Clone)]
 pub enum OriginKind {
-    /// New object Instantiation.
-    New,
+    /// New object Instantiation (resulting ID),
+    New(Uid),
+    // FIXME: IDs need to be for current, not passed down.
+    // FIXME: Move ID into Origin.
     /// Cloned from another reference, (original ID, site of original reference).
     ClonedFrom(Uid, Box<Origin>),
     /// Upgraded from a weak reference, (weak reference ID, site of weak reference).
