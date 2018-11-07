@@ -13,7 +13,29 @@
 //! like `new_at_line` or `clone_at_line` should be used. In case the compatible methods like `new`,
 //! `clone`, ... are called, `Site::Unknown` is used for the resulting tracked `Origin`.
 //!
-//! TODO: Example on how to use, including `file!` and `line!` macros.
+//! ```rust
+//! use snarc::Snarc;
+//!
+//! // Snarc keeps track of every instatiation, clone, upgrade and downgrade:
+//! let foo = Snarc::new_at_line(vec![1.0, 2.0, 3.0], file!(), line!());
+//!
+//! // A file/line annotated clone of the reference. The new reference will have a record
+//! // of its origin and the line where the cloning happened.
+//! let a = foo.clone_at_line(file!(), line!());
+//!
+//! // "Regular" clone. This will not record file and line information.
+//! let b = Snarc::clone(&foo);
+//! ```
+//!
+//! In most cases, `Snarc` can be used as a quick drop-in replacement:
+//!
+//! ```rust
+//! use snarc::Snarc as Arc;
+//!
+//! let bar = Arc::new(vec![1.0, 2.0, 3.0]);
+//! ```
+//!
+//! This form allows only some instances to be annotated, or annotations being added gradually.
 
 pub mod tracing;
 
@@ -159,58 +181,90 @@ impl<T> Snarc<T> {
         Snarc::new_at_site(data, Site::SourceFile { file, line })
     }
 
-    /// Creates a new `Weak` pointer to this value.
+    /// Creates new `Snarc` with unknown origin.
+    ///
+    /// If possible, use `new_at_line` instead.
+    pub fn new(data: T) -> Snarc<T> {
+        Snarc::new_at_site(data, Site::Unknown)
+    }
+
+    /// Clones `Snarc` with the provided file name and line as the origin.
     pub fn clone_at_line(&self, file: &'static str, line: u32) -> Snarc<T> {
         self.clone_at_site(Site::SourceFile { file, line })
     }
 
-    /// Creates a new `Weak` pointer to this value.
+    /// Creates a new `Weak` pointer to this value with the provided file name and line as the
+    /// origin.
     pub fn downgrade_at_line(this: &Self, file: &'static str, line: u32) -> Weak<T> {
         Snarc::downgrade_at_site(this, Site::SourceFile { file, line })
     }
 
+    /// Creates a new `Weak` pointer to this value.
+    ///
+    /// If possible, use `new_at_line` instead.
+    pub fn downgrade(this: &Self) -> Weak<T> {
+        Snarc::downgrade_at_site(this, Site::Unknown)
+    }
+
     /// Returns the contained value if the `Snarc` has exactly one strong reference.
     pub fn try_unwrap(_this: Self) -> Result<T, Self> {
-        // TODO: Come up with a clever way to impl this.
-        // Arc::try_unwrap(this.inner)
-        //     .map(|i| i.data)
-        //     .map_err(|i| Snarc { inner: i })
+        // TODO: Make this work (currently, drop is an issue).
+
+        // let Snarc { inner, id } = this;
+
+        // match Arc::try_unwrap(inner) {
+        //     Ok(inner) => {
+        //         // We've dissolved our Snarc, as we are the last strong reference. All that's left
+        //         // are weak references, so our copy of `map` is the last one surviving and will
+        //         // be freed once we exit this function. We do not need to clean up for this reason.
+        //         Ok(inner.data)
+        //     }
+        //     Err(new_inner) => Err(Snarc {
+        //         inner: new_inner,
+        //         id,
+        //     }),
+        // }
         unimplemented!()
     }
 
     /// Gets the number of `Weak` pointers to this value.
     ///
     /// See `std::sync::Arc::weak_count` for details.
-    pub fn weak_count(_this: &Snarc<T>) -> usize {
-        unimplemented!()
+    pub fn weak_count(this: &Snarc<T>) -> usize {
+        Arc::weak_count(&this.inner)
     }
 
     /// Gets the number of `Snarc` pointers to this value.
     ///
     /// See `std::sync::Arc::strong_count` for details.
-    pub fn strong_count(_this: &Snarc<T>) -> usize {
-        unimplemented!()
+    pub fn strong_count(this: &Snarc<T>) -> usize {
+        Arc::strong_count(&this.inner)
     }
 
     /// Returns true if the two Arcs point to the same value (not just values that compare as equal).
     ///
     /// See `std::sync::Arc::ptr_eq` for details.
-    pub fn ptr_eq(_this: &Snarc<T>, _other: &Snarc<T>) -> bool {
-        unimplemented!()
-    }
-
-    /// Makes a mutable reference into the given Arc.
-    ///
-    /// See `std::sync::Arc::make_mut` for details.
-    pub fn make_mut(_this: &mut Snarc<T>) -> &mut T {
-        unimplemented!()
+    pub fn ptr_eq(this: &Snarc<T>, other: &Snarc<T>) -> bool {
+        Arc::ptr_eq(&this.inner, &other.inner)
     }
 
     /// Returns a mutable reference to the inner value, if there are no other Arc or Weak pointers
     /// to the same value.
     ///
     /// See `std::sync::Arc::make_mut` for details.
-    pub fn get_mut(_this: &mut Snarc<T>) -> Option<&mut T> {
+    pub fn get_mut(this: &mut Snarc<T>) -> Option<&mut T> {
+        Arc::get_mut(&mut this.inner).map(|inner| &mut inner.data)
+    }
+}
+
+impl<T> Snarc<T>
+where
+    T: Clone,
+{
+    /// Makes a mutable reference into the given Arc.
+    ///
+    /// See `std::sync::Arc::make_mut` for details.
+    pub fn make_mut(_this: &mut Snarc<T>) -> &mut T {
         unimplemented!()
     }
 }
@@ -321,6 +375,14 @@ impl<T> Weak<T> {
     /// See `std::sync::Weak::upgrade` for details.
     pub fn upgrade_at_line(&self, file: &'static str, line: u32) -> Option<Snarc<T>> {
         self.upgrade_at_site(Site::SourceFile { file, line })
+    }
+
+    /// Attempts to upgrade the Weak pointer to an Arc, extending the lifetime of the value if
+    /// successful.
+    ///
+    /// If possible, use `upgrade_at_line` instead.
+    pub fn upgrade(&self) -> Option<Snarc<T>> {
+        self.upgrade_at_site(Site::Unknown)
     }
 }
 
