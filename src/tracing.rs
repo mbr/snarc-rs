@@ -2,11 +2,13 @@
 //!
 //! Data types to track origin and history across call sites.
 
+use std::fmt;
+
 /// Unique ID type to identify ancestors.
 pub type Uid = usize;
 
 /// Call site.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Site {
     /// File/line location inside a source file.
     SourceFile {
@@ -56,4 +58,104 @@ pub struct Origin {
     pub kind: OriginKind,
     /// The site where the new instation occured.
     pub site: Site,
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut cur = Some(self);
+
+        while let Some(link) = cur {
+            match link.kind {
+                OriginKind::New(id) => {
+                    write!(f, "new<{}>[{}]", id, link.site)?;
+                    cur = None;
+                }
+                OriginKind::ClonedFrom(id, ref parent) => {
+                    write!(f, "clone<{}>[{}]", id, link.site)?;
+                    cur = Some(parent);
+                }
+                OriginKind::UpgradedFrom(id, ref parent) => {
+                    write!(f, "upgrade<{}>[{}]", id, link.site)?;
+                    cur = Some(parent);
+                }
+                OriginKind::DowngradedFrom(id, ref parent) => {
+                    write!(f, "downgrade<{}>[{}]", id, link.site)?;
+                    cur = Some(parent);
+                }
+            };
+
+            if cur.is_some() {
+                write!(f, " <- ")?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Origin, OriginKind, Site};
+
+    #[test]
+    fn format_origin_single() {
+        let subj = Origin {
+            kind: OriginKind::New(15),
+            site: Site::Unknown,
+        };
+
+        assert_eq!("new<15>[?]".to_string(), format!("{}", subj));
+
+        let subj = Origin {
+            kind: OriginKind::New(123),
+            site: Site::SourceFile {
+                file: "foo.rs",
+                line: 543,
+            },
+        };
+
+        assert_eq!("new<123>[foo.rs:543]".to_string(), format!("{}", subj));
+
+        let subj = Origin {
+            kind: OriginKind::New(0),
+            site: Site::Annotated("dummy".to_string()),
+        };
+
+        assert_eq!("new<0>[\"dummy\"]".to_string(), format!("{}", subj));
+    }
+
+    #[test]
+    fn format_origin_chain() {
+        let one = Origin {
+            kind: OriginKind::New(0),
+            site: Site::SourceFile {
+                file: "orig.rs",
+                line: 999,
+            },
+        };
+
+        let two = Origin {
+            kind: OriginKind::ClonedFrom(1, Box::new(one)),
+            site: Site::Annotated("step two".to_string()),
+        };
+
+        let three = Origin {
+            kind: OriginKind::DowngradedFrom(2, Box::new(two)),
+            site: Site::Unknown,
+        };
+
+        let four = Origin {
+            kind: OriginKind::UpgradedFrom(3, Box::new(three)),
+            site: Site::SourceFile {
+                file: "final.rs",
+                line: 42,
+            },
+        };
+
+        assert_eq!(
+            "upgrade<3>[final.rs:42] <- downgrade<2>[?] \
+             <- clone<1>[\"step two\"] <- new<0>[orig.rs:999]",
+            format!("{}", four)
+        );
+    }
 }
