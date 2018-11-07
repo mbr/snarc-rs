@@ -186,10 +186,22 @@ impl<T> Snarc<T> {
 
     /// Returns the contained value if the `Snarc` has exactly one strong reference.
     pub fn try_unwrap(_this: Self) -> Result<T, Self> {
-        // TODO: Come up with a clever way to impl this.
-        // Arc::try_unwrap(this.inner)
-        //     .map(|i| i.data)
-        //     .map_err(|i| Snarc { inner: i })
+        // TODO: Make this work (currently, drop is an issue).
+
+        // let Snarc { inner, id } = this;
+
+        // match Arc::try_unwrap(inner) {
+        //     Ok(inner) => {
+        //         // We've dissolved our Snarc, as we are the last strong reference. All that's left
+        //         // are weak references, so our copy of `map` is the last one surviving and will
+        //         // be freed once we exit this function. We do not need to clean up for this reason.
+        //         Ok(inner.data)
+        //     }
+        //     Err(new_inner) => Err(Snarc {
+        //         inner: new_inner,
+        //         id,
+        //     }),
+        // }
         unimplemented!()
     }
 
