@@ -246,7 +246,7 @@ mod tests {
         println!("\nthing_strong_0: {:?}", thing_strong_0);
         println!("\nthing_strong_1: {:?}", thing_strong_1);
         println!("\nthing_weak_0: {:?}", thing_weak_0);
-        println!("\nthing_weak_1: {:?}", thing_weak_0);
+        println!("\nthing_weak_1: {:?}", thing_weak_1);
         println!("\nthing_strong_2: {:?}", thing_strong_2);
 
         // TODO: Actually check something.
