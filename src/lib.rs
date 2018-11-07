@@ -208,36 +208,41 @@ impl<T> Snarc<T> {
     /// Gets the number of `Weak` pointers to this value.
     ///
     /// See `std::sync::Arc::weak_count` for details.
-    pub fn weak_count(_this: &Snarc<T>) -> usize {
-        unimplemented!()
+    pub fn weak_count(this: &Snarc<T>) -> usize {
+        Arc::weak_count(&this.inner)
     }
 
     /// Gets the number of `Snarc` pointers to this value.
     ///
     /// See `std::sync::Arc::strong_count` for details.
-    pub fn strong_count(_this: &Snarc<T>) -> usize {
-        unimplemented!()
+    pub fn strong_count(this: &Snarc<T>) -> usize {
+        Arc::strong_count(&this.inner)
     }
 
     /// Returns true if the two Arcs point to the same value (not just values that compare as equal).
     ///
     /// See `std::sync::Arc::ptr_eq` for details.
-    pub fn ptr_eq(_this: &Snarc<T>, _other: &Snarc<T>) -> bool {
-        unimplemented!()
-    }
-
-    /// Makes a mutable reference into the given Arc.
-    ///
-    /// See `std::sync::Arc::make_mut` for details.
-    pub fn make_mut(_this: &mut Snarc<T>) -> &mut T {
-        unimplemented!()
+    pub fn ptr_eq(this: &Snarc<T>, other: &Snarc<T>) -> bool {
+        Arc::ptr_eq(&this.inner, &other.inner)
     }
 
     /// Returns a mutable reference to the inner value, if there are no other Arc or Weak pointers
     /// to the same value.
     ///
     /// See `std::sync::Arc::make_mut` for details.
-    pub fn get_mut(_this: &mut Snarc<T>) -> Option<&mut T> {
+    pub fn get_mut(this: &mut Snarc<T>) -> Option<&mut T> {
+        Arc::get_mut(&mut this.inner).map(|inner| &mut inner.data)
+    }
+}
+
+impl<T> Snarc<T>
+where
+    T: Clone,
+{
+    /// Makes a mutable reference into the given Arc.
+    ///
+    /// See `std::sync::Arc::make_mut` for details.
+    pub fn make_mut(_this: &mut Snarc<T>) -> &mut T {
         unimplemented!()
     }
 }
