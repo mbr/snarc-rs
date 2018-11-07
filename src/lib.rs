@@ -1,20 +1,26 @@
+//! A 'snitching' atomically reference counted pointer.
+
+pub mod narc;
+
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Mutex;
 
+type Uid = usize;
+
 #[derive(Debug, Copy, Clone)]
 pub enum Site {
-    SourceFile { file: &'static str, line: usize },
+    SourceFile { file: &'static str, line: u32 },
     Unknown,
     // TODO: Backtrace,
 }
 
 #[derive(Debug, Clone)]
 enum OriginKind {
-    Created,
-    ClonedFrom(usize, Box<Origin>),
-    UpgradedFrom(usize, Box<Origin>),
-    DowngradedFrom(usize, Box<Origin>),
+    New,
+    ClonedFrom(Uid, Box<Origin>),
+    UpgradedFrom(Uid, Box<Origin>),
+    DowngradedFrom(Uid, Box<Origin>),
 }
 
 #[derive(Debug, Clone)]
@@ -25,26 +31,34 @@ pub struct Origin {
 
 #[derive(Debug)]
 pub struct Strong<T> {
-    id: usize,
+    id: Uid,
     origin: Origin,
     holder: *const Holder<T>,
 }
 
 #[derive(Debug)]
 pub struct Weak<T> {
-    id: usize,
+    id: Uid,
     origin: Origin,
     holder: *const Holder<T>,
 }
 
 #[derive(Debug)]
-struct MetaData {
-    strong_refs: Vec<usize>,
-    weak_refs: Vec<usize>,
-    id_counter: usize,
+struct Metadata {
+    strong_refs: Vec<Uid>,
+    weak_refs: Vec<Uid>,
+    id_counter: Uid,
 }
 
-impl MetaData {
+impl Metadata {
+    fn new() -> Metadata {
+        Metadata {
+            strong_refs: Vec::new(),
+            weak_refs: Vec::new(),
+            id_counter: 0,
+        }
+    }
+
     fn should_cleanup(&self) -> bool {
         self.strong_refs.is_empty() && self.weak_refs.is_empty()
     }
@@ -53,7 +67,7 @@ impl MetaData {
 #[derive(Debug)]
 struct Holder<T> {
     data: Option<Box<T>>,
-    meta: Mutex<MetaData>,
+    meta: Mutex<Metadata>,
 }
 
 fn delete_from_vec<'a, T>(v: &mut Vec<T>, item: &T)
@@ -76,15 +90,11 @@ impl<T> Holder<T> {
     fn new(data: T) -> Holder<T> {
         Holder {
             data: Some(Box::new(data)),
-            meta: Mutex::new(MetaData {
-                strong_refs: Vec::new(),
-                weak_refs: Vec::new(),
-                id_counter: 0,
-            }),
+            meta: Mutex::new(Metadata::new()),
         }
     }
 
-    fn create_strong_ref(&self) -> Option<usize> {
+    fn create_strong_ref(&self) -> Option<Uid> {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         // We perform this assert after the `strong_refs` lock, to hitch a ride on the lock.
@@ -100,7 +110,7 @@ impl<T> Holder<T> {
         Some(id)
     }
 
-    fn create_weak_ref(&self) -> usize {
+    fn create_weak_ref(&self) -> Uid {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         let id = meta.id_counter;
@@ -110,7 +120,7 @@ impl<T> Holder<T> {
         id
     }
 
-    fn drop_strong_ref(&self, id: usize) -> bool {
+    fn drop_strong_ref(&self, id: Uid) -> bool {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
         assert!(
             self.data.is_some(),
@@ -142,7 +152,7 @@ impl<T> Holder<T> {
         meta.should_cleanup()
     }
 
-    fn drop_weak_ref(&self, id: usize) -> bool {
+    fn drop_weak_ref(&self, id: Uid) -> bool {
         let mut meta = self.meta.lock().expect("Poisoned metadata");
 
         delete_from_vec(&mut meta.weak_refs, &id);
@@ -162,7 +172,7 @@ impl<T> Strong<T> {
             id,
             origin: Origin {
                 site,
-                kind: OriginKind::Created,
+                kind: OriginKind::New,
             },
             holder,
         }
@@ -208,17 +218,17 @@ impl<T> Strong<T> {
     }
 
     #[inline]
-    pub fn new_from(data: T, file: &'static str, line: usize) -> Strong<T> {
+    pub fn new_from(data: T, file: &'static str, line: u32) -> Strong<T> {
         Self::new_with_site(data, Site::SourceFile { file, line })
     }
 
     #[inline]
-    pub fn clone_from(&self, file: &'static str, line: usize) -> Strong<T> {
+    pub fn clone_from(&self, file: &'static str, line: u32) -> Strong<T> {
         self.clone_with_site(Site::SourceFile { file, line })
     }
 
     #[inline]
-    pub fn downgrade_from(this: &Self, file: &'static str, line: usize) -> Weak<T> {
+    pub fn downgrade_from(this: &Self, file: &'static str, line: u32) -> Weak<T> {
         Self::downgrade_with_site(this, Site::SourceFile { file, line })
     }
 
@@ -272,7 +282,7 @@ impl<T> Weak<T> {
     }
 
     #[inline]
-    pub fn upgrade_from(this: &Self, file: &'static str, line: usize) -> Option<Strong<T>> {
+    pub fn upgrade_from(this: &Self, file: &'static str, line: u32) -> Option<Strong<T>> {
         Self::upgrade_with_site(this, Site::SourceFile { file, line })
     }
 
@@ -288,5 +298,26 @@ impl<T> Drop for Weak<T> {
             let holder = unsafe { Box::from_raw(self.holder as *mut Self) };
             drop(holder);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(dead_code)]
+
+    // This import should definitely be able to take care of business:
+    use super::Strong;
+
+    // TODO: Uncomment
+    //
+    // #[test]
+    fn basic() {
+        let thing = ();
+
+        let thing_strong_0 = Strong::new_from(thing, file!(), line!());
+        let thing_strong_1 = thing_strong_0.clone_from(file!(), line!());
+
+        println!("thing_strong_0: {:?}", thing_strong_0);
+        println!("thing_strong_1: {:?}", thing_strong_1);
     }
 }
