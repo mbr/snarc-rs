@@ -39,15 +39,15 @@ impl fmt::Display for Site {
 #[derive(Debug, Clone)]
 pub enum OriginKind {
     /// New object Instantiation (resulting ID),
-    New(Uid),
+    New,
     // FIXME: IDs need to be for current, not passed down.
     // FIXME: Move ID into Origin.
     /// Cloned from another reference, (original ID, site of original reference).
-    Cloned(Uid, Box<Origin>),
+    Cloned(Box<Origin>),
     /// Upgraded from a weak reference, (weak reference ID, site of weak reference).
-    Upgraded(Uid, Box<Origin>),
+    Upgraded(Box<Origin>),
     /// Downgraded from a strong reference, (strong reference ID, site of strong reference).
-    Downgraded(Uid, Box<Origin>),
+    Downgraded(Box<Origin>),
 }
 
 /// Describes origin and location of a new reference creation.
@@ -58,6 +58,8 @@ pub struct Origin {
     pub kind: OriginKind,
     /// The site where the new instation occured.
     pub site: Site,
+    /// The resulting ID of the instantiation.
+    pub id: Uid,
 }
 
 impl fmt::Display for Origin {
@@ -66,20 +68,20 @@ impl fmt::Display for Origin {
 
         while let Some(link) = cur {
             match link.kind {
-                OriginKind::New(id) => {
-                    write!(f, "new<{}>[{}]", id, link.site)?;
+                OriginKind::New => {
+                    write!(f, "new<{}>[{}]", link.id, link.site)?;
                     cur = None;
                 }
-                OriginKind::Cloned(id, ref parent) => {
-                    write!(f, "clone<{}>[{}]", id, link.site)?;
+                OriginKind::Cloned(ref parent) => {
+                    write!(f, "clone<{}>[{}]", link.id, link.site)?;
                     cur = Some(parent);
                 }
-                OriginKind::Upgraded(id, ref parent) => {
-                    write!(f, "upgrade<{}>[{}]", id, link.site)?;
+                OriginKind::Upgraded(ref parent) => {
+                    write!(f, "upgrade<{}>[{}]", link.id, link.site)?;
                     cur = Some(parent);
                 }
-                OriginKind::Downgraded(id, ref parent) => {
-                    write!(f, "downgrade<{}>[{}]", id, link.site)?;
+                OriginKind::Downgraded(ref parent) => {
+                    write!(f, "downgrade<{}>[{}]", link.id, link.site)?;
                     cur = Some(parent);
                 }
             };
@@ -100,25 +102,28 @@ mod tests {
     #[test]
     fn format_origin_single() {
         let subj = Origin {
-            kind: OriginKind::New(15),
+            kind: OriginKind::New,
             site: Site::Unknown,
+            id: 15,
         };
 
         assert_eq!("new<15>[?]".to_string(), format!("{}", subj));
 
         let subj = Origin {
-            kind: OriginKind::New(123),
+            kind: OriginKind::New,
             site: Site::SourceFile {
                 file: "foo.rs",
                 line: 543,
             },
+            id: 123,
         };
 
         assert_eq!("new<123>[foo.rs:543]".to_string(), format!("{}", subj));
 
         let subj = Origin {
-            kind: OriginKind::New(0),
+            kind: OriginKind::New,
             site: Site::Annotated("dummy".to_string()),
+            id: 0,
         };
 
         assert_eq!("new<0>[\"dummy\"]".to_string(), format!("{}", subj));
@@ -127,29 +132,33 @@ mod tests {
     #[test]
     fn format_origin_chain() {
         let one = Origin {
-            kind: OriginKind::New(0),
+            kind: OriginKind::New,
             site: Site::SourceFile {
                 file: "orig.rs",
                 line: 999,
             },
+            id: 0,
         };
 
         let two = Origin {
-            kind: OriginKind::Cloned(1, Box::new(one)),
+            kind: OriginKind::Cloned(Box::new(one)),
             site: Site::Annotated("step two".to_string()),
+            id: 1,
         };
 
         let three = Origin {
-            kind: OriginKind::Downgraded(2, Box::new(two)),
+            kind: OriginKind::Downgraded(Box::new(two)),
             site: Site::Unknown,
+            id: 2,
         };
 
         let four = Origin {
-            kind: OriginKind::Upgraded(3, Box::new(three)),
+            kind: OriginKind::Upgraded(Box::new(three)),
             site: Site::SourceFile {
                 file: "final.rs",
                 line: 42,
             },
+            id: 3,
         };
 
         assert_eq!(

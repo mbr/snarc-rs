@@ -113,8 +113,9 @@ impl<T> Snarc<T> {
         let id = map.next_id();
 
         let origin = Origin {
-            kind: OriginKind::New(id),
+            kind: OriginKind::New,
             site,
+            id,
         };
 
         map.strongs.insert(id, origin);
@@ -139,11 +140,12 @@ impl<T> Snarc<T> {
             .get(&self.id)
             .expect("Internal consistency error (clone). This should never happen.")
             .clone();
-        let new_origin = Origin {
-            kind: OriginKind::Cloned(self.id, Box::new(parent_origin)),
-            site,
-        };
         let new_id = map.next_id();
+        let new_origin = Origin {
+            kind: OriginKind::Cloned(Box::new(parent_origin)),
+            site,
+            id: new_id,
+        };
         map.strongs.insert(new_id, new_origin);
 
         Snarc {
@@ -164,11 +166,12 @@ impl<T> Snarc<T> {
             .get(&this.id)
             .expect("Internal consistency error (downgrade). This should never happen.")
             .clone();
-        let new_origin = Origin {
-            kind: OriginKind::Downgraded(this.id, Box::new(prev_origin)),
-            site,
-        };
         let new_id = map.next_id();
+        let new_origin = Origin {
+            kind: OriginKind::Downgraded(Box::new(prev_origin)),
+            site,
+            id: new_id,
+        };
         map.weaks.insert(new_id, new_origin);
 
         Weak {
@@ -309,11 +312,12 @@ impl<T> Weak<T> {
                     .get(&id)
                     .expect("Internal consistency error (upgrade)")
                     .clone();
-                let new_origin = Origin {
-                    kind: OriginKind::Upgraded(id, Box::new(prev_origin)),
-                    site,
-                };
                 let new_id = map.next_id();
+                let new_origin = Origin {
+                    kind: OriginKind::Upgraded(Box::new(prev_origin)),
+                    site,
+                    id: new_id,
+                };
                 map.strongs.insert(new_id, new_origin);
                 new_id
             };
@@ -347,11 +351,12 @@ impl<T> Weak<T> {
                     .get(&our_id)
                     .expect("Internal consistency error (weak clone). This should never happen.")
                     .clone();
-                let new_origin = Origin {
-                    kind: OriginKind::Cloned(our_id, Box::new(parent_origin)),
-                    site,
-                };
                 let new_id = map.next_id();
+                let new_origin = Origin {
+                    kind: OriginKind::Cloned(Box::new(parent_origin)),
+                    site,
+                    id: new_id,
+                };
                 map.weaks.insert(new_id, new_origin);
 
                 Weak {
