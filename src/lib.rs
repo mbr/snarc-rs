@@ -53,7 +53,7 @@ use tracing::{Origin, OriginKind, Site, Uid};
 /// annotating methods `new_at_line`, `clone_at_line`, etc. are used, the `Snarc` will also know
 /// its origin.
 #[derive(Debug)]
-pub struct Snarc<T> {
+pub struct Snarc<T: ?Sized> {
     /// Wrapped [std::sync] arc reference.
     inner: Arc<Inner<T>>,
     /// Unique ID for this instance.
@@ -90,20 +90,20 @@ impl Map {
 
 /// Inner state of `Snarc`.
 #[derive(Debug)]
-struct Inner<T> {
-    /// The actual value.
-    data: T,
+struct Inner<T: ?Sized> {
     /// Sibling metadata.
     map: Mutex<Map>,
+    /// The actual value.
+    data: T,
 }
 
 /// The non-owned version of a `Snarc`.
 #[derive(Debug)]
-pub struct Weak<T> {
-    /// Wrapped non-owned [std::sync] arc reference.
-    inner: ArcWeak<Inner<T>>,
+pub struct Weak<T: ?Sized> {
     /// Unique ID for this instance.
     id: Option<Uid>,
+    /// Wrapped non-owned [std::sync] arc reference.
+    inner: ArcWeak<Inner<T>>,
 }
 
 impl<T> Snarc<T> {
@@ -131,6 +131,41 @@ impl<T> Snarc<T> {
         }
     }
 
+    /// Returns a new `Snarc` with the provided file name and line as the origin.
+    pub fn new_at_line(data: T, file: &'static str, line: u32) -> Snarc<T> {
+        Snarc::new_at_site(data, Site::SourceFile { file, line })
+    }
+
+    /// Creates new `Snarc` with unknown origin.
+    ///
+    /// If possible, use `new_at_line` instead.
+    pub fn new(data: T) -> Snarc<T> {
+        Snarc::new_at_site(data, Site::Unknown)
+    }
+
+    /// Returns the contained value if the `Snarc` has exactly one strong reference.
+    pub fn try_unwrap(_this: Self) -> Result<T, Self> {
+        // TODO: Make this work (currently, drop is an issue).
+
+        // let Snarc { inner, id } = this;
+
+        // match Arc::try_unwrap(inner) {
+        //     Ok(inner) => {
+        //         // We've dissolved our Snarc, as we are the last strong reference. All that's left
+        //         // are weak references, so our copy of `map` is the last one surviving and will
+        //         // be freed once we exit this function. We do not need to clean up for this reason.
+        //         Ok(inner.data)
+        //     }
+        //     Err(new_inner) => Err(Snarc {
+        //         inner: new_inner,
+        //         id,
+        //     }),
+        // }
+        unimplemented!()
+    }
+}
+
+impl<T: ?Sized> Snarc<T> {
     /// Internal cloning function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
@@ -182,18 +217,6 @@ impl<T> Snarc<T> {
         }
     }
 
-    /// Returns a new `Snarc` with the provided file name and line as the origin.
-    pub fn new_at_line(data: T, file: &'static str, line: u32) -> Snarc<T> {
-        Snarc::new_at_site(data, Site::SourceFile { file, line })
-    }
-
-    /// Creates new `Snarc` with unknown origin.
-    ///
-    /// If possible, use `new_at_line` instead.
-    pub fn new(data: T) -> Snarc<T> {
-        Snarc::new_at_site(data, Site::Unknown)
-    }
-
     /// Clones `Snarc` with the provided file name and line as the origin.
     pub fn clone_at_line(&self, file: &'static str, line: u32) -> Snarc<T> {
         self.clone_at_site(Site::SourceFile { file, line })
@@ -210,27 +233,6 @@ impl<T> Snarc<T> {
     /// If possible, use `new_at_line` instead.
     pub fn downgrade(this: &Self) -> Weak<T> {
         Snarc::downgrade_at_site(this, Site::Unknown)
-    }
-
-    /// Returns the contained value if the `Snarc` has exactly one strong reference.
-    pub fn try_unwrap(_this: Self) -> Result<T, Self> {
-        // TODO: Make this work (currently, drop is an issue).
-
-        // let Snarc { inner, id } = this;
-
-        // match Arc::try_unwrap(inner) {
-        //     Ok(inner) => {
-        //         // We've dissolved our Snarc, as we are the last strong reference. All that's left
-        //         // are weak references, so our copy of `map` is the last one surviving and will
-        //         // be freed once we exit this function. We do not need to clean up for this reason.
-        //         Ok(inner.data)
-        //     }
-        //     Err(new_inner) => Err(Snarc {
-        //         inner: new_inner,
-        //         id,
-        //     }),
-        // }
-        unimplemented!()
     }
 
     /// Gets the number of `Weak` pointers to this value.
@@ -294,10 +296,7 @@ impl<T> Snarc<T> {
     }
 }
 
-impl<T> Snarc<T>
-where
-    T: Clone,
-{
+impl<T: Clone> Snarc<T> {
     /// Makes a mutable reference into the given Arc.
     ///
     /// See `std::sync::Arc::make_mut` for details.
@@ -306,15 +305,16 @@ where
     }
 }
 
-impl<T: Deref> Deref for Snarc<T> {
+impl<T: ?Sized> Deref for Snarc<T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.inner.data
     }
 }
 
-impl<T> Drop for Snarc<T> {
+impl<T: ?Sized> Drop for Snarc<T> {
     fn drop(&mut self) {
         let mut map = self.inner.map.lock().unwrap();
         map.strongs
@@ -329,7 +329,7 @@ impl<T> Clone for Snarc<T> {
     }
 }
 
-impl<T> Weak<T> {
+impl<T: ?Sized> Weak<T> {
     /// Internal upgrade function.
     ///
     /// Directly accepts a `Site` instance, creates the correct `Origin` with
@@ -425,7 +425,7 @@ impl<T> Weak<T> {
     }
 }
 
-impl<T> Drop for Weak<T> {
+impl<T: ?Sized> Drop for Weak<T> {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
             let mut map = inner.map.lock().unwrap();
@@ -440,11 +440,32 @@ impl<T> Drop for Weak<T> {
     }
 }
 
-impl<T> Clone for Weak<T> {
+impl<T: ?Sized> Clone for Weak<T> {
     fn clone(&self) -> Self {
         self.clone_at_site(Site::Unknown)
     }
 }
+
+// TODO: impl
+//
+// impl<T> Default for Weak<T> {
+//
+// impl<T: ?Sized + PartialEq> PartialEq for Snarc<T> {
+// impl<T: ?Sized + PartialOrd> PartialOrd for Snarc<T> {
+// impl<T: ?Sized + Ord> Ord for Snarc<T> {
+// impl<T: ?Sized + Eq> Eq for Snarc<T> {}
+// impl<T: ?Sized + fmt::Display> fmt::Display for Snarc<T> {
+// impl<T: ?Sized + fmt::Debug> fmt::Debug for Snarc<T> { // Manual impl?
+// impl<T: ?Sized> fmt::Pointer for Snarc<T> {
+// impl<T: Default> Default for Snarc<T> {
+// impl<T: ?Sized + Hash> Hash for Snarc<T> {
+// impl<T> From<T> for Snarc<T> {
+// impl<'a, T: Clone> From<&'a [T]> for Snarc<[T]> {
+// impl<'a> From<&'a str> for Snarc<str> {
+// impl From<String> for Snarc<str> {
+// impl<T: ?Sized> From<Box<T>> for Snarc<T> {
+// impl<T> From<Vec<T>> for Snarc<[T]> {
+
 
 /// Output helper.
 ///
