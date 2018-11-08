@@ -37,28 +37,19 @@
 //!
 //! This form allows only some instances to be annotated, or annotations being added gradually.
 
+#![feature(coerce_unsized)]
+#![feature(unsize)]
+
 pub mod tracing;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::ops::Deref;
+use std::ops::{Deref, CoerceUnsized};
 use std::sync::{Arc, Mutex, Weak as ArcWeak};
+use std::marker::Unsize;
+use std::borrow;
 
 use tracing::{Origin, OriginKind, Site, Uid};
-
-/// A 'snitching' atomically reference counted pointer.
-///
-/// A `Snarc` wraps an actual `Arc` and assigns it a unique ID upon creation. Any offspring of
-/// created via `clone` or `downgrade` is tracked by being assigned a unique ID as well. If the
-/// annotating methods `new_at_line`, `clone_at_line`, etc. are used, the `Snarc` will also know
-/// its origin.
-#[derive(Debug)]
-pub struct Snarc<T: ?Sized> {
-    /// Wrapped [std::sync] arc reference.
-    inner: Arc<Inner<T>>,
-    /// Unique ID for this instance.
-    id: Uid,
-}
 
 /// Tracked reference state.
 ///
@@ -97,6 +88,22 @@ struct Inner<T: ?Sized> {
     data: T,
 }
 
+/// A 'snitching' atomically reference counted pointer.
+///
+/// A `Snarc` wraps an actual `Arc` and assigns it a unique ID upon creation. Any offspring of
+/// created via `clone` or `downgrade` is tracked by being assigned a unique ID as well. If the
+/// annotating methods `new_at_line`, `clone_at_line`, etc. are used, the `Snarc` will also know
+/// its origin.
+#[derive(Debug)]
+pub struct Snarc<T: ?Sized> {
+    /// Wrapped [std::sync] arc reference.
+    inner: Arc<Inner<T>>,
+    /// Unique ID for this instance.
+    id: Uid,
+}
+
+impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<Snarc<U>> for Snarc<T> {}
+
 /// The non-owned version of a `Snarc`.
 #[derive(Debug)]
 pub struct Weak<T: ?Sized> {
@@ -105,6 +112,8 @@ pub struct Weak<T: ?Sized> {
     /// Wrapped non-owned [std::sync] arc reference.
     inner: ArcWeak<Inner<T>>,
 }
+
+impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<Weak<U>> for Weak<T> {}
 
 impl<T> Snarc<T> {
     /// Internal instantiation function.
@@ -323,11 +332,24 @@ impl<T: ?Sized> Drop for Snarc<T> {
     }
 }
 
-impl<T> Clone for Snarc<T> {
+impl<T: ?Sized> Clone for Snarc<T> {
     fn clone(&self) -> Self {
         self.clone_at_site(Site::Unknown)
     }
 }
+
+impl<T: ?Sized> borrow::Borrow<T> for Snarc<T> {
+    fn borrow(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T: ?Sized> AsRef<T> for Snarc<T> {
+    fn as_ref(&self) -> &T {
+        &**self
+    }
+}
+
 
 impl<T: ?Sized> Weak<T> {
     /// Internal upgrade function.
@@ -503,10 +525,10 @@ impl<'a, T: 'a> fmt::Display for Dump<'a, T> {
         weaks.sort();
 
         for strong in strongs {
-            writeln!(f, "S| {}", strong);
+            writeln!(f, "S| {}", strong)?;
         }
         for weak in weaks {
-            writeln!(f, "W| {}", weak);
+            writeln!(f, "W| {}", weak)?;
         }
 
         Ok(())
